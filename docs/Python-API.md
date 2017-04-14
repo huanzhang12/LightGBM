@@ -1045,3 +1045,48 @@ The methods of each Class is in alphabetical order.
     Returns
     -------
     ax : matplotlib Axes
+
+#### create_tree_digraph(booster, tree_index=0, show_info=None, name=None, comment=None, filename=None, directory=None, format=None, engine=None, encoding=None, graph_attr=None, node_attr=None, edge_attr=None, body=None, strict=False):
+    Create a digraph of specified tree.
+
+    See:
+      - http://graphviz.readthedocs.io/en/stable/api.html#digraph
+
+    Parameters
+    ----------
+    booster : Booster, LGBMModel
+        Booster or LGBMModel instance.
+    tree_index : int, default 0
+        Specify tree index of target tree.
+    show_info : list
+        Information shows on nodes.
+        options: 'split_gain', 'internal_value', 'internal_count' or 'leaf_count'.
+    name : str
+        Graph name used in the source code.
+    comment : str
+        Comment added to the first line of the source.
+    filename : str
+        Filename for saving the source (defaults to name + '.gv').
+    directory : str
+        (Sub)directory for source saving and rendering.
+    format : str
+        Rendering output format ('pdf', 'png', ...).
+    engine : str
+        Layout command used ('dot', 'neato', ...).
+    encoding : str
+        Encoding for saving the source.
+    graph_attr : dict
+        Mapping of (attribute, value) pairs for the graph.
+    node_attr : dict
+        Mapping of (attribute, value) pairs set for all nodes.
+    edge_attr : dict
+        Mapping of (attribute, value) pairs set for all edges.
+    body : list of str
+        Iterable of lines to add to the graph body.
+    strict : bool
+        Iterable of lines to add to the graph body.
+
+    Returns
+    -------
+    graph : graphviz Digraph
+

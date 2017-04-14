@@ -167,7 +167,7 @@ void GBDT::ResetTrainingData(const BoostingConfig* config, const Dataset* train_
       CHECK(num_tree_per_iteration_ == num_class_);
       // + 1 here for the binary classification
       class_default_output_ = std::vector<double>(num_tree_per_iteration_ + 1, 0.0f);
-      std::vector<data_size_t> cnt_per_class(num_tree_per_iteration_, 0);
+      std::vector<data_size_t> cnt_per_class(num_tree_per_iteration_ + 1, 0);
       auto label = train_data_->metadata().label();
       for (int i = 0; i < num_data_; ++i) {
         ++cnt_per_class[static_cast<int>(label[i])];
@@ -870,14 +870,12 @@ std::vector<std::pair<size_t, std::string>> GBDT::FeatureImportance() const {
   return pairs;
 }
 
-
-
-void GBDT::PredictRaw(const double* value, double* output) const {
+void GBDT::PredictRaw(const double* features, double* output) const {
   if (num_threads_ <= num_tree_per_iteration_) {
     #pragma omp parallel for schedule(static)
     for (int k = 0; k < num_tree_per_iteration_; ++k) {
       for (int i = 0; i < num_iteration_for_pred_; ++i) {
-        output[k] += models_[i * num_tree_per_iteration_ + k]->Predict(value);
+        output[k] += models_[i * num_tree_per_iteration_ + k]->Predict(features);
       }
     }
   } else {
@@ -885,19 +883,19 @@ void GBDT::PredictRaw(const double* value, double* output) const {
       double t = 0.0f;
       #pragma omp parallel for schedule(static) reduction(+:t)
       for (int i = 0; i < num_iteration_for_pred_; ++i) {
-        t += models_[i * num_tree_per_iteration_ + k]->Predict(value);
+        t += models_[i * num_tree_per_iteration_ + k]->Predict(features);
       }
       output[k] = t;
     }
   }
 }
 
-void GBDT::Predict(const double* value, double* output) const {
+void GBDT::Predict(const double* features, double* output) const {
   if (num_threads_ <= num_tree_per_iteration_) {
     #pragma omp parallel for schedule(static)
     for (int k = 0; k < num_tree_per_iteration_; ++k) {
       for (int i = 0; i < num_iteration_for_pred_; ++i) {
-        output[k] += models_[i * num_tree_per_iteration_ + k]->Predict(value);
+        output[k] += models_[i * num_tree_per_iteration_ + k]->Predict(features);
       }
     }
   } else {
@@ -905,7 +903,7 @@ void GBDT::Predict(const double* value, double* output) const {
       double t = 0.0f;
       #pragma omp parallel for schedule(static) reduction(+:t)
       for (int i = 0; i < num_iteration_for_pred_; ++i) {
-        t += models_[i * num_tree_per_iteration_ + k]->Predict(value);
+        t += models_[i * num_tree_per_iteration_ + k]->Predict(features);
       }
       output[k] = t;
     }
@@ -915,11 +913,11 @@ void GBDT::Predict(const double* value, double* output) const {
   }
 }
 
-void GBDT::PredictLeafIndex(const double* value, double* output) const {
+void GBDT::PredictLeafIndex(const double* features, double* output) const {
   int total_tree = num_iteration_for_pred_ * num_tree_per_iteration_;
   #pragma omp parallel for schedule(static)
   for (int i = 0; i < total_tree; ++i) {
-    output[i] = models_[i]->PredictLeafIndex(value);
+    output[i] = models_[i]->PredictLeafIndex(features);
   }
 }
 
