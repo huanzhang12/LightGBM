@@ -273,6 +273,7 @@ class LGBMModel(LGBMModelBase):
         self._Booster = None
         self.evals_result = None
         self.best_iteration = -1
+        self.best_score = {}
         if callable(self.objective):
             self.fobj = _objective_function_wrapper(self.objective)
         else:
@@ -280,7 +281,7 @@ class LGBMModel(LGBMModelBase):
 
     def fit(self, X, y,
             sample_weight=None, init_score=None, group=None,
-            eval_set=None, eval_sample_weight=None,
+            eval_set=None, eval_names=None, eval_sample_weight=None,
             eval_init_score=None, eval_group=None,
             eval_metric=None,
             early_stopping_rounds=None, verbose=True,
@@ -303,6 +304,8 @@ class LGBMModel(LGBMModelBase):
             group data of training data
         eval_set : list, optional
             A list of (X, y) tuple pairs to use as a validation set for early-stopping
+        eval_names: list of string
+            Names of eval_set
         eval_sample_weight : List of array
             weight of eval data
         eval_init_score : List of array
@@ -402,7 +405,7 @@ class LGBMModel(LGBMModelBase):
                 valid_sets.append(valid_set)
 
         self._Booster = train(params, train_set,
-                              self.n_estimators, valid_sets=valid_sets,
+                              self.n_estimators, valid_sets=valid_sets, valid_names=eval_names,
                               early_stopping_rounds=early_stopping_rounds,
                               evals_result=evals_result, fobj=self.fobj, feval=feval,
                               verbose_eval=verbose, feature_name=feature_name,
@@ -414,6 +417,11 @@ class LGBMModel(LGBMModelBase):
 
         if early_stopping_rounds is not None:
             self.best_iteration = self._Booster.best_iteration
+        self.best_score = self._Booster.best_score
+
+        # free dataset
+        self.booster_.free_dataset()
+        del train_set, valid_sets
         return self
 
     def predict(self, X, raw_score=False, num_iteration=0):
@@ -510,7 +518,7 @@ class LGBMRegressor(LGBMModel, LGBMRegressorBase):
 
     def fit(self, X, y,
             sample_weight=None, init_score=None,
-            eval_set=None, eval_sample_weight=None,
+            eval_set=None, eval_names=None, eval_sample_weight=None,
             eval_init_score=None,
             eval_metric="l2",
             early_stopping_rounds=None, verbose=True,
@@ -518,6 +526,7 @@ class LGBMRegressor(LGBMModel, LGBMRegressorBase):
 
         super(LGBMRegressor, self).fit(X, y, sample_weight=sample_weight,
                                        init_score=init_score, eval_set=eval_set,
+                                       eval_names=eval_names,
                                        eval_sample_weight=eval_sample_weight,
                                        eval_init_score=eval_init_score,
                                        eval_metric=eval_metric,
@@ -556,7 +565,7 @@ class LGBMClassifier(LGBMModel, LGBMClassifierBase):
 
     def fit(self, X, y,
             sample_weight=None, init_score=None,
-            eval_set=None, eval_sample_weight=None,
+            eval_set=None, eval_names=None, eval_sample_weight=None,
             eval_init_score=None,
             eval_metric="logloss",
             early_stopping_rounds=None, verbose=True,
@@ -585,6 +594,7 @@ class LGBMClassifier(LGBMModel, LGBMClassifierBase):
 
         super(LGBMClassifier, self).fit(X, y, sample_weight=sample_weight,
                                         init_score=init_score, eval_set=eval_set,
+                                        eval_names=eval_names,
                                         eval_sample_weight=eval_sample_weight,
                                         eval_init_score=eval_init_score,
                                         eval_metric=eval_metric,
@@ -664,7 +674,7 @@ class LGBMRanker(LGBMModel):
 
     def fit(self, X, y,
             sample_weight=None, init_score=None, group=None,
-            eval_set=None, eval_sample_weight=None,
+            eval_set=None, eval_names=None, eval_sample_weight=None,
             eval_init_score=None, eval_group=None,
             eval_metric='ndcg', eval_at=1,
             early_stopping_rounds=None, verbose=True,
@@ -694,7 +704,8 @@ class LGBMRanker(LGBMModel):
             self.eval_at = eval_at
         super(LGBMRanker, self).fit(X, y, sample_weight=sample_weight,
                                     init_score=init_score, group=group,
-                                    eval_set=eval_set, eval_sample_weight=eval_sample_weight,
+                                    eval_set=eval_set, eval_names=eval_names,
+                                    eval_sample_weight=eval_sample_weight,
                                     eval_init_score=eval_init_score, eval_group=eval_group,
                                     eval_metric=eval_metric,
                                     early_stopping_rounds=early_stopping_rounds,

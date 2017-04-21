@@ -770,7 +770,7 @@ class Dataset(object):
                     """create valid"""
                     self._lazy_init(self.data, label=self.label, max_bin=self.max_bin, reference=self.reference,
                                     weight=self.weight, group=self.group, predictor=self._predictor,
-                                    silent=self.silent, params=self.params)
+                                    silent=self.silent, feature_name=self.feature_name, params=self.params)
                 else:
                     """construct subset"""
                     used_indices = list_to_1d_numpy(self.used_indices, np.int32, name='used_indices')
@@ -1004,7 +1004,8 @@ class Dataset(object):
         feature_name : list of str
             Feature names
         """
-        self.feature_name = feature_name
+        if feature_name != 'auto':
+            self.feature_name = feature_name
         if self.handle is not None and feature_name is not None and feature_name != 'auto':
             if len(feature_name) != self.num_feature():
                 raise ValueError("Length of feature_name({}) and num_feature({}) don't match".format(len(feature_name), self.num_feature()))
@@ -1179,6 +1180,7 @@ class Booster(object):
         self.__train_data_name = "training"
         self.__attr = {}
         self.best_iteration = -1
+        self.best_score = {}
         params = {} if params is None else params
         if silent:
             params["verbose"] = 0
@@ -1265,6 +1267,10 @@ class Booster(object):
                 ctypes.byref(handle)))
             state['handle'] = handle
         self.__dict__.update(state)
+
+    def free_dataset(self):
+        self.__dict__.pop('train_set', None)
+        self.__dict__.pop('valid_sets', None)
 
     def set_train_data_name(self, name):
         self.__train_data_name = name

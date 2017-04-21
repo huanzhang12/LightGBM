@@ -32,8 +32,8 @@ class template(object):
     @staticmethod
     def test_template(params={'objective': 'regression', 'metric': 'l2'},
                       X_y=load_boston(True), feval=mean_squared_error,
-                      num_round=200, init_model=None, custom_eval=None,
-                      early_stopping_rounds=5,
+                      num_round=50, init_model=None, custom_eval=None,
+                      early_stopping_rounds=2,
                       return_data=False, return_model=False):
         params['verbose'], params['seed'] = -1, 42
         X_train, X_test, y_train, y_test = train_test_split(*X_y, test_size=0.1, random_state=42)
@@ -96,20 +96,27 @@ class TestEngine(unittest.TestCase):
         X_train, X_test, y_train, y_test = train_test_split(*X_y, test_size=0.1, random_state=42)
         lgb_train = lgb.Dataset(X_train, y_train)
         lgb_eval = lgb.Dataset(X_test, y_test, reference=lgb_train)
+        valid_set_name = 'valid_set'
         # no early stopping
         gbm = lgb.train(params, lgb_train,
                         num_boost_round=10,
                         valid_sets=lgb_eval,
+                        valid_names=valid_set_name,
                         verbose_eval=False,
                         early_stopping_rounds=5)
         self.assertEqual(gbm.best_iteration, -1)
+        self.assertIn(valid_set_name, gbm.best_score)
+        self.assertIn('binary_logloss', gbm.best_score[valid_set_name])
         # early stopping occurs
         gbm = lgb.train(params, lgb_train,
                         num_boost_round=100,
                         valid_sets=lgb_eval,
+                        valid_names=valid_set_name,
                         verbose_eval=False,
                         early_stopping_rounds=5)
         self.assertLessEqual(gbm.best_iteration, 100)
+        self.assertIn(valid_set_name, gbm.best_score)
+        self.assertIn('binary_logloss', gbm.best_score[valid_set_name])
 
     def test_continue_train_and_other(self):
         params = {
@@ -157,8 +164,12 @@ class TestEngine(unittest.TestCase):
 
     def test_feature_name(self):
         lgb_train, _ = template.test_template(return_data=True)
-        feature_names = ['f' + str(i) for i in range(13)]
-        gbm = lgb.train({'verbose': -1}, lgb_train, num_boost_round=10, feature_name=feature_names)
+        feature_names = ['f_' + str(i) for i in range(13)]
+        gbm = lgb.train({'verbose': -1}, lgb_train, num_boost_round=5, feature_name=feature_names)
+        self.assertListEqual(feature_names, gbm.feature_name())
+        # test feature_names with whitespaces
+        feature_names_with_space = ['f ' + str(i) for i in range(13)]
+        gbm = lgb.train({'verbose': -1}, lgb_train, num_boost_round=5, feature_name=feature_names_with_space)
         self.assertListEqual(feature_names, gbm.feature_name())
 
     def test_save_load_copy_pickle(self):

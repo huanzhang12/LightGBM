@@ -10,8 +10,8 @@ Default values for the following parameters have changed:
 
 * min_data_in_leaf = 100 => 20
 * min_sum_hessian_in_leaf = 10 => 1e-3
-* num_leaves = 255 => 31
-* num_iterations = 100 => 10
+* num_leaves = 127 => 31
+* num_iterations = 10 => 100
 
 ## Parameter format
 
@@ -176,7 +176,7 @@ The parameter format is `key1=value1 key2=value2 ... ` . And parameters can be s
 * `predict_leaf_index `, default=`false`, type=bool, alias=`leaf_index `,`is_predict_leaf_index `
   * only used in prediction task
   * Set to `true` to predict with leaf index of all trees
-* `bin_construct_sample_cnt`, default=`50000`, type=int
+* `bin_construct_sample_cnt`, default=`200000`, type=int
   * Number of data that sampled to construct histogram bins.
   * Will give better training result when set this larger. But will increase data loading time.
   * Set this to larger value if data is very sparse.
@@ -235,13 +235,14 @@ The parameter format is `key1=value1 key2=value2 ... ` . And parameters can be s
 
 ## Network parameters
 
-Following parameters are used for parallel learning, and only used for base(socket) version. It doesn't need to set them for MPI version. 
+Following parameters are used for parallel learning, and only used for base(socket) version. 
 
 * `num_machines`, default=`1`, type=int, alias=`num_machine`
   * Used for parallel learning, the number of machines for parallel learning application
+  * Need to set this in both socket and mpi version. 
 * `local_listen_port`, default=`12400`, type=int, alias=`local_port`
   * TCP listen port for local machines.
-  * Should allow this port in firewall setting before training.
+  * Should allow this port in firewall setting before training. 
 * `time_out`, default=`120`, type=int
   * Socket time-out in minutes.
 * `machine_list_file`, default=`""`, type=string
