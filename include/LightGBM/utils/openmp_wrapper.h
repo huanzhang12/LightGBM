@@ -22,7 +22,6 @@ public:
   void ReThrow() {
     if (ex_ptr_ != nullptr) {
       std::rethrow_exception(ex_ptr_);
-      ex_ptr_ = nullptr;
     }
   }
   void CaptureException() {
@@ -58,6 +57,7 @@ catch(...) { omp_except_helper.CaptureException();  }
       simulate a single thread running.
       All #pragma omp should be ignored by the compiler **/
   inline void omp_set_num_threads(int) {}
+  inline void omp_set_nested(int) {}
   inline int omp_get_num_threads() {return 1;}
   inline int omp_get_thread_num() {return 0;}
 #ifdef __cplusplus

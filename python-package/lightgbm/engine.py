@@ -10,7 +10,7 @@ import numpy as np
 
 from . import callback
 from .basic import Booster, Dataset, LightGBMError, _InnerPredictor
-from .compat import (SKLEARN_INSTALLED, LGBMStratifiedKFold, integer_types,
+from .compat import (SKLEARN_INSTALLED, LGBMStratifiedKFold, LGBMGroupKFold, integer_types,
                      range_, string_type)
 
 
@@ -19,7 +19,8 @@ def train(params, train_set, num_boost_round=100,
           fobj=None, feval=None, init_model=None,
           feature_name='auto', categorical_feature='auto',
           early_stopping_rounds=None, evals_result=None,
-          verbose_eval=True, learning_rates=None, callbacks=None):
+          verbose_eval=True, learning_rates=None,
+          keep_training_booster=False, callbacks=None):
     """
     Train with given parameters.
 
@@ -80,6 +81,10 @@ def train(params, train_set, num_boost_round=100,
         in terms of current number of round (e.g. yields learning rate decay)
         - list l: learning_rate = l[current_round]
         - function f: learning_rate = f(current_round)
+    keep_training_booster : boolean
+        Whether the return booster will be used to keep training.
+        If false, will convert into _InnerPredictor before return.
+        You can still use _InnerPredictor as init_model for future continue training.
     callbacks : list of callback functions
         List of callback functions that are applied at each iteration.
         See Callbacks in Python-API.md for more information.
@@ -165,7 +170,7 @@ def train(params, train_set, num_boost_round=100,
         booster.set_train_data_name(train_data_name)
     for valid_set, name_valid_set in zip(reduced_valid_sets, name_valid_sets):
         booster.add_valid(valid_set, name_valid_set)
-    booster.best_iteration = -1
+    booster.best_iteration = 0
 
     """start training"""
     for i in range_(init_iteration, init_iteration + num_boost_round):
@@ -200,6 +205,9 @@ def train(params, train_set, num_boost_round=100,
     booster.best_score = collections.defaultdict(dict)
     for dataset_name, eval_name, score, _ in evaluation_result_list:
         booster.best_score[dataset_name][eval_name] = score
+    if not keep_training_booster:
+        booster._load_model_from_string(booster._save_model_to_string())
+        booster.free_dataset()
     return booster
 
 
@@ -224,29 +232,38 @@ class CVBooster(object):
         return handlerFunction
 
 
-def _make_n_folds(full_data, data_splitter, nfold, params, seed, fpreproc=None, stratified=False, shuffle=True):
+def _make_n_folds(full_data, folds, nfold, params, seed, fpreproc=None, stratified=True, shuffle=True):
     """
     Make an n-fold list of Booster from random indices.
     """
-    num_data = full_data.construct().num_data()
-    if data_splitter is not None:
-        if not hasattr(data_splitter, 'split'):
-            raise AttributeError("data_splitter has no method 'split'")
-        folds = data_splitter.split(np.arange(num_data))
-    elif stratified:
-        if not SKLEARN_INSTALLED:
-            raise LightGBMError('Scikit-learn is required for stratified cv')
-        sfk = LGBMStratifiedKFold(n_splits=nfold, shuffle=shuffle, random_state=seed)
-        folds = sfk.split(X=np.zeros(num_data), y=full_data.get_label())
+    full_data = full_data.construct()
+    num_data = full_data.num_data()
+    if folds is not None:
+        if not hasattr(folds, '__iter__'):
+            raise AttributeError("folds should be a generator or iterator of (train_idx, test_idx)")
     else:
-        if shuffle:
-            randidx = np.random.RandomState(seed).permutation(num_data)
+        if 'objective' in params and params['objective'] == 'lambdarank':
+            if not SKLEARN_INSTALLED:
+                raise LightGBMError('Scikit-learn is required for lambdarank cv.')
+            # lambdarank task, split according to groups
+            group_info = full_data.get_group().astype(int)
+            flatted_group = np.repeat(range(len(group_info)), repeats=group_info)
+            group_kfold = LGBMGroupKFold(n_splits=nfold)
+            folds = group_kfold.split(X=np.zeros(num_data), groups=flatted_group)
+        elif stratified:
+            if not SKLEARN_INSTALLED:
+                raise LightGBMError('Scikit-learn is required for stratified cv.')
+            skf = LGBMStratifiedKFold(n_splits=nfold, shuffle=shuffle, random_state=seed)
+            folds = skf.split(X=np.zeros(num_data), y=full_data.get_label())
         else:
-            randidx = np.arange(num_data)
-        kstep = int(num_data / nfold)
-        test_id = [randidx[i: i + kstep] for i in range_(0, num_data, kstep)]
-        train_id = [np.concatenate([test_id[i] for i in range_(nfold) if k != i]) for k in range_(nfold)]
-        folds = zip(train_id, test_id)
+            if shuffle:
+                randidx = np.random.RandomState(seed).permutation(num_data)
+            else:
+                randidx = np.arange(num_data)
+            kstep = int(num_data / nfold)
+            test_id = [randidx[i: i + kstep] for i in range_(0, num_data, kstep)]
+            train_id = [np.concatenate([test_id[i] for i in range_(nfold) if k != i]) for k in range_(nfold)]
+            folds = zip(train_id, test_id)
 
     ret = CVBooster()
     for train_idx, test_idx in folds:
@@ -277,7 +294,7 @@ def _agg_cv_result(raw_results):
 
 
 def cv(params, train_set, num_boost_round=10,
-       data_splitter=None, nfold=5, stratified=False, shuffle=True,
+       folds=None, nfold=5, stratified=True, shuffle=True,
        metrics=None, fobj=None, feval=None, init_model=None,
        feature_name='auto', categorical_feature='auto',
        early_stopping_rounds=None, fpreproc=None,
@@ -294,8 +311,9 @@ def cv(params, train_set, num_boost_round=10,
         Data to be trained.
     num_boost_round : int
         Number of boosting iterations.
-    data_splitter : an instance with split(X) method
-        Instance with split(X) method.
+    folds : a generator or iterator of (train_idx, test_idx) tuples
+        The train indices and test indices for each folds.
+        This argument has highest priority over other data split arguments.
     nfold : int
         Number of folds in CV.
     stratified : bool
@@ -304,6 +322,7 @@ def cv(params, train_set, num_boost_round=10,
         Whether shuffle before split data
     metrics : string or list of strings
         Evaluation metrics to be watched in CV.
+        If `metrics` is not None, the metric in `params` will be overridden.
     fobj : function
         Custom objective function.
     feval : function
@@ -358,18 +377,13 @@ def cv(params, train_set, num_boost_round=10,
     train_set.set_feature_name(feature_name)
     train_set.set_categorical_feature(categorical_feature)
 
-    if metrics:
-        params.setdefault('metric', [])
-        if isinstance(metrics, string_type):
-            params['metric'].append(metrics)
-        else:
-            params['metric'].extend(metrics)
+    if metrics is not None:
+        params['metric'] = metrics
 
     results = collections.defaultdict(list)
-    cvfolds = _make_n_folds(train_set, data_splitter=data_splitter,
-                            nfold=nfold, params=params, seed=seed,
-                            fpreproc=fpreproc, stratified=stratified,
-                            shuffle=shuffle)
+    cvfolds = _make_n_folds(train_set, folds=folds, nfold=nfold,
+                            params=params, seed=seed, fpreproc=fpreproc,
+                            stratified=stratified, shuffle=shuffle)
 
     # setup callbacks
     if callbacks is None:

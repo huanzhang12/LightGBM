@@ -174,6 +174,7 @@ Dataset* DatasetLoader::LoadFromFile(const char* filename, int rank, int num_mac
       Log::Fatal("Could not recognize data format of %s", filename);
     }
     dataset->data_filename_ = filename;
+    dataset->label_idx_ = label_idx_;
     dataset->metadata_.Init(filename);
     if (!io_config_.use_two_round_loading) {
       // read data to memory
@@ -228,6 +229,7 @@ Dataset* DatasetLoader::LoadFromFileAlignWithOtherDataset(const char* filename, 
       Log::Fatal("Could not recognize data format of %s", filename);
     }
     dataset->data_filename_ = filename;
+    dataset->label_idx_ = label_idx_;
     dataset->metadata_.Init(filename);
     if (!io_config_.use_two_round_loading) {
       // read data in memory
@@ -315,6 +317,8 @@ Dataset* DatasetLoader::LoadFromBinFile(const char* data_filename, const char* b
   mem_ptr += sizeof(dataset->num_features_);
   dataset->num_total_features_ = *(reinterpret_cast<const int*>(mem_ptr));
   mem_ptr += sizeof(dataset->num_total_features_);
+  dataset->label_idx_ = *(reinterpret_cast<const int*>(mem_ptr));
+  mem_ptr += sizeof(dataset->label_idx_);
   const int* tmp_feature_map = reinterpret_cast<const int*>(mem_ptr);
   dataset->used_feature_map_.clear();
   for (int i = 0; i < dataset->num_total_features_; ++i) {
@@ -504,7 +508,7 @@ Dataset* DatasetLoader::CostructFromSampleData(double** sample_values,
     }
     bin_mappers[i].reset(new BinMapper());
     bin_mappers[i]->FindBin(sample_values[i], num_per_col[i], total_sample_size,
-                            io_config_.max_bin, io_config_.min_data_in_bin, filter_cnt, bin_type);
+                            io_config_.max_bin, io_config_.min_data_in_bin, filter_cnt, bin_type, io_config_.use_missing, io_config_.zero_as_missing);
     OMP_LOOP_EX_END();
   }
   OMP_THROW_EX();
@@ -673,7 +677,7 @@ void DatasetLoader::ConstructBinMappersFromTextData(int rank, int num_machines, 
         sample_values.resize(inner_data.first + 1);
         sample_indices.resize(inner_data.first + 1);
       }
-      if (std::fabs(inner_data.second) > kEpsilon) {
+      if (std::fabs(inner_data.second) > kEpsilon || std::isnan(inner_data.second)) {
         sample_values[inner_data.first].emplace_back(inner_data.second);
         sample_indices[inner_data.first].emplace_back(i);
       }
@@ -726,7 +730,7 @@ void DatasetLoader::ConstructBinMappersFromTextData(int rank, int num_machines, 
       }
       bin_mappers[i].reset(new BinMapper());
       bin_mappers[i]->FindBin(sample_values[i].data(), static_cast<int>(sample_values[i].size()),
-                              sample_data.size(), io_config_.max_bin, io_config_.min_data_in_bin, filter_cnt, bin_type);
+                              sample_data.size(), io_config_.max_bin, io_config_.min_data_in_bin, filter_cnt, bin_type, io_config_.use_missing, io_config_.zero_as_missing);
       OMP_LOOP_EX_END();
     }
     OMP_THROW_EX();
@@ -734,11 +738,39 @@ void DatasetLoader::ConstructBinMappersFromTextData(int rank, int num_machines, 
     // if have multi-machines, need to find bin distributed
     // different machines will find bin for different features
 
+    int max_bin = 0;
+    int total_num_feature = static_cast<int>(sample_values.size());
+    for (int i = 0; i < total_num_feature; ++i) {
+      max_bin = std::max(max_bin, bin_mappers[i]->num_bin());
+    }
+    std::pair<int, int> local_sync_info(max_bin, total_num_feature);
+    std::pair<int, int> global_sync_info(max_bin, total_num_feature);
+    // sync global max_bin and total_num_feature
+    Network::Allreduce(reinterpret_cast<char*>(&local_sync_info),
+                       sizeof(local_sync_info), sizeof(global_sync_info),
+                       reinterpret_cast<char*>(&global_sync_info),
+                       [] (const char* src, char* dst, int len) {
+      int used_size = 0;
+      const int type_size = sizeof(std::pair<int, int>);
+      const std::pair<int, int> *p1;
+      std::pair<int, int> *p2;
+      while (used_size < len) {
+        p1 = reinterpret_cast<const std::pair<int, int> *>(src);
+        p2 = reinterpret_cast<std::pair<int, int> *>(dst);
+        p2->first = std::max(p1->first, p2->first);
+        // ignore the rare features
+        p2->second = std::min(p1->second, p2->second);
+        src += type_size;
+        dst += type_size;
+        used_size += type_size;
+      }
+    });
+    max_bin = global_sync_info.first;
+    total_num_feature = global_sync_info.second;
     // start and len will store the process feature indices for different machines
     // machine i will find bins for features in [ start[i], start[i] + len[i] )
     std::vector<int> start(num_machines);
     std::vector<int> len(num_machines);
-    int total_num_feature = static_cast<int>(sample_values.size());
     int step = (total_num_feature + num_machines - 1) / num_machines;
     if (step < 1) { step = 1; }
 
@@ -761,39 +793,10 @@ void DatasetLoader::ConstructBinMappersFromTextData(int rank, int num_machines, 
       }
       bin_mappers[i].reset(new BinMapper());
       bin_mappers[i]->FindBin(sample_values[start[rank] + i].data(), static_cast<int>(sample_values[start[rank] + i].size()),
-                              sample_data.size(), io_config_.max_bin, io_config_.min_data_in_bin, filter_cnt, bin_type);
+                              sample_data.size(), io_config_.max_bin, io_config_.min_data_in_bin, filter_cnt, bin_type, io_config_.use_missing, io_config_.zero_as_missing);
       OMP_LOOP_EX_END();
     }
     OMP_THROW_EX();
-    // get max_bin
-    int local_max_bin = 0;
-    for (int i = 0; i < len[rank]; ++i) {
-      if (ignore_features_.count(start[rank] + i) > 0) {
-        continue;
-      }
-      local_max_bin = std::max(local_max_bin, bin_mappers[i]->num_bin());
-    }
-    int max_bin = local_max_bin;
-    // sync global max_bin
-    Network::Allreduce(reinterpret_cast<char*>(&local_max_bin),
-                       sizeof(local_max_bin), sizeof(local_max_bin),
-                       reinterpret_cast<char*>(&max_bin),
-                       [](const char* src, char* dst, int len) {
-      int used_size = 0;
-      const int type_size = sizeof(int);
-      const int *p1;
-      int *p2;
-      while (used_size < len) {
-        p1 = reinterpret_cast<const int *>(src);
-        p2 = reinterpret_cast<int *>(dst);
-        if (*p1 > *p2) {
-          std::memcpy(dst, src, type_size);
-        }
-        src += type_size;
-        dst += type_size;
-        used_size += type_size;
-      }
-    });
     // get size of bin mapper with max_bin size
     int type_size = BinMapper::SizeForSpecificBin(max_bin);
     // since sizes of different feature may not be same, we expand all bin mapper to type_size

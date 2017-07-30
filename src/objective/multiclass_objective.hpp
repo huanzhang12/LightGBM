@@ -22,7 +22,7 @@ public:
   explicit MulticlassSoftmax(const std::vector<std::string>& strs) {
     num_class_ = -1;
     for (auto str : strs) {
-      auto tokens = Common::Split(str.c_str(), ":");
+      auto tokens = Common::Split(str.c_str(), ':');
       if (tokens.size() == 2) {
         if (tokens[0] == std::string("num_class")) {
           Common::Atoi(tokens[1].c_str(), &num_class_);
@@ -118,6 +118,8 @@ public:
 
   int NumPredictOneRow() const override { return num_class_; }
 
+  bool NeedAccuratePrediction() const override { return false; }
+
 private:
   /*! \brief Number of data */
   data_size_t num_data_;
@@ -149,7 +151,7 @@ public:
     num_class_ = -1;
     sigmoid_ = -1;
     for (auto str : strs) {
-      auto tokens = Common::Split(str.c_str(), ":");
+      auto tokens = Common::Split(str.c_str(), ':');
       if (tokens.size() == 2) {
         if (tokens[0] == std::string("num_class")) {
           Common::Atoi(tokens[1].c_str(), &num_class_);
@@ -207,6 +209,8 @@ public:
   int NumTreePerIteration() const override { return num_class_; }
 
   int NumPredictOneRow() const override { return num_class_; }
+
+  bool NeedAccuratePrediction() const override { return false; }
 
 private:
   /*! \brief Number of data */

@@ -1,18 +1,18 @@
 Package: lightgbm
 Type: Package
 Title: Light Gradient Boosting Machine
-Version: 0.1
-Date: 2016-12-29
+Version: 2.0.4
+Date: 2017-07-14
 Author: Guolin Ke <guolin.ke@microsoft.com>
 Maintainer: Guolin Ke <guolin.ke@microsoft.com>
 Description: LightGBM is a gradient boosting framework that uses tree based learning algorithms. 
     It is designed to be distributed and efficient with the following advantages:
-        1.Faster training speed and higher efficiency. 
-        2.Lower memory usage. 
-        3.Better accuracy. 
-        4.Parallel learning supported. 
-        5. Capable of handling large-scale data. 
-License: The MIT License (MIT) | file LICENSE
+        1. Faster training speed and higher efficiency.
+        2. Lower memory usage.
+        3. Better accuracy.
+        4. Parallel learning supported.
+        5. Capable of handling large-scale data.
+License: MIT + file LICENSE
 URL: https://github.com/Microsoft/LightGBM
 BugReports: https://github.com/Microsoft/LightGBM/issues
 VignetteBuilder: knitr
@@ -28,11 +28,11 @@ Suggests:
     stringi (>= 0.5.2)
 Depends:
     R (>= 3.0),
-    R6
+    R6 (>= 2.0)
 Imports:
     methods,
     Matrix (>= 1.1-0),
     data.table (>= 1.9.6),
     magrittr (>= 1.5),
-    jsonlite
-RoxygenNote: 5.0.1
+    jsonlite (>= 1.0)
+RoxygenNote: 6.0.1

@@ -4,6 +4,7 @@ Booster <- R6Class(
   public = list(
     
     best_iter = -1,
+    best_score = -1,
     record_evals = list(),
     
     # Finalize will free up the handles
@@ -24,6 +25,7 @@ Booster <- R6Class(
     initialize = function(params = list(),
                           train_set = NULL,
                           modelfile = NULL,
+                          model_str = NULL,
                           ...) {
       
       # Create parameters and handle
@@ -73,10 +75,22 @@ Booster <- R6Class(
                            ret = handle,
                            lgb.c_str(modelfile))
         
+      } else if (!is.null(model_str)) {
+        
+        # Do we have a model_str as character?
+          if (!is.character(model_str)) {
+            stop("lgb.Booster: Can only use a string as model_str")
+          }
+          
+          # Create booster from model
+          handle <- lgb.call("LGBM_BoosterLoadModelFromString_R",
+                             ret = handle,
+                             lgb.c_str(model_str))
+        
       } else {
         
         # Booster non existent
-        stop("lgb.Booster: Need at least either training dataset or model file to create booster instance")
+        stop("lgb.Booster: Need at least either training dataset, model file, or model_str to create booster instance")
         
       }
       
@@ -95,7 +109,7 @@ Booster <- R6Class(
       
       # Set name
       private$name_train_set <- name
-      self
+      return(invisible(self))
       
     },
     
@@ -130,7 +144,7 @@ Booster <- R6Class(
       private$is_predicted_cur_iter <- c(private$is_predicted_cur_iter, FALSE)
       
       # Return self
-      return(self)
+      return(invisible(self))
       
     },
     
@@ -148,7 +162,7 @@ Booster <- R6Class(
                params_str)
       
       # Return self
-      return(self)
+      return(invisible(self))
       
     },
     
@@ -216,7 +230,6 @@ Booster <- R6Class(
         private$is_predicted_cur_iter[[i]] <- FALSE
       }
       
-      # Return self
       return(ret)
       
     },
@@ -235,7 +248,7 @@ Booster <- R6Class(
       }
       
       # Return self
-      return(self)
+      return(invisible(self))
       
     },
     
@@ -340,7 +353,22 @@ Booster <- R6Class(
                lgb.c_str(filename))
       
       # Return self
-      return(self)
+      return(invisible(self))
+    },
+    
+    # Save model to string
+    save_model_to_string = function(num_iteration = NULL) {
+      
+      # Check if number of iteration is non existent
+      if (is.null(num_iteration)) {
+        num_iteration <- self$best_iter
+      }
+      
+      # Return model string
+      return(lgb.call.return.str("LGBM_BoosterSaveModelToString_R",
+                                 private$handle,
+                                 as.integer(num_iteration)))
+      
     },
     
     # Dump model in memory
@@ -364,7 +392,7 @@ Booster <- R6Class(
                        rawscore = FALSE,
                        predleaf = FALSE,
                        header = FALSE,
-                       reshape = FALSE) {
+                       reshape = FALSE, ...) {
       
       # Check if number of iteration is  non existent
       if (is.null(num_iteration)) {
@@ -372,7 +400,7 @@ Booster <- R6Class(
       }
       
       # Predict on new data
-      predictor <- Predictor$new(private$handle)
+      predictor <- Predictor$new(private$handle, ...)
       predictor$predict(data, num_iteration, rawscore, predleaf, header, reshape)
       
     },
@@ -388,17 +416,8 @@ Booster <- R6Class(
     # Save model to temporary file for in-memory saving
     save = function() {
       
-      # Create temporary file
-      temp <- tempfile()
-      
-      # Save model to file
-      lgb.save(self, temp)
-      
       # Overwrite model in object
-      self$raw <- readChar(temp, file.info(temp)$size)
-      
-      # Remove temporary file
-      file.remove(temp)
+      self$raw <- self$save_model_to_string(NULL)
       
     }
     
@@ -627,7 +646,7 @@ predict.lgb.Booster <- function(object, data,
                         rawscore = FALSE,
                         predleaf = FALSE,
                         header = FALSE,
-                        reshape = FALSE) {
+                        reshape = FALSE, ...) {
   
   # Check booster existence
   if (!lgb.is.Booster(object)) {
@@ -640,16 +659,19 @@ predict.lgb.Booster <- function(object, data,
                  rawscore,
                  predleaf,
                  header,
-                 reshape)
+                 reshape, ...)
 }
 
 #' Load LightGBM model
 #'
-#' Load LightGBM model from saved model file
+#' Load LightGBM model from saved model file or string
+#' Load LightGBM takes in either a file path or model string
+#' If both are provided, Load will default to loading from file
 #'
 #' @param filename path of model file
+#' @param model_str a str containing the model
 #'
-#' @return booster
+#' @return lgb.Booster
 #' 
 #' @examples
 #' \dontrun{
@@ -670,20 +692,34 @@ predict.lgb.Booster <- function(object, data,
 #'                    learning_rate = 1,
 #'                    early_stopping_rounds = 10)
 #' lgb.save(model, "model.txt")
-#' load_booster <- lgb.load("model.txt")
+#' load_booster <- lgb.load(filename = "model.txt")
+#' model_string <- model$save_model_to_string(NULL) # saves best iteration
+#' load_booster_from_str <- lgb.load(model_str = model_string)
 #' }
 #' 
 #' @rdname lgb.load
 #' @export
-lgb.load <- function(filename){
+lgb.load <- function(filename = NULL, model_str = NULL){
   
-  # Check if file name is character or not
-  if (!is.character(filename)) {
+  if (is.null(filename) && is.null(model_str)) {
+    stop("lgb.load: either filename or model_str must be given")
+  }
+  
+  # Load from filename
+  if (!is.null(filename) && !is.character(filename)) {
     stop("lgb.load: filename should be character")
   }
   
   # Return new booster
-  Booster$new(modelfile = filename)
+  if (!is.null(filename) && !file.exists(filename)) stop("lgb.load: file does not exist for supplied filename")
+  if (!is.null(filename)) return(invisible(Booster$new(modelfile = filename)))
+  
+  # Load from model_str
+  if (!is.null(model_str) && !is.character(model_str)) {
+    stop("lgb.load: model_str should be character")
+  }    
+  # Return new booster
+  if (!is.null(model_str)) return(invisible(Booster$new(model_str = model_str)))
   
 }
 
@@ -695,7 +731,7 @@ lgb.load <- function(filename){
 #' @param filename saved filename
 #' @param num_iteration number of iteration want to predict with, NULL or <= 0 means use best iteration
 #'
-#' @return booster
+#' @return lgb.Booster
 #' 
 #' @examples
 #' \dontrun{
@@ -733,7 +769,7 @@ lgb.save <- function(booster, filename, num_iteration = NULL){
   }
   
   # Store booster
-  booster$save_model(filename, num_iteration)
+  invisible(booster$save_model(filename, num_iteration))
   
 }
 

@@ -10,10 +10,16 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <memory>
 
 namespace LightGBM {
+
+const std::string kDefaultTreeLearnerType = "serial";
+const std::string kDefaultDevice = "cpu";
+const std::string kDefaultBoostingType = "gbdt";
+const std::string kDefaultObjectiveType = "regression";
 
 /*!
 * \brief The interface for Config
@@ -37,7 +43,7 @@ public:
   * \param out Value will assign to out if key exists
   * \return True if key exists
   */
-  inline bool GetString(
+  inline static bool GetString(
     const std::unordered_map<std::string, std::string>& params,
     const std::string& name, std::string* out);
 
@@ -48,7 +54,7 @@ public:
   * \param out Value will assign to out if key exists
   * \return True if key exists
   */
-  inline bool GetInt(
+  inline static bool GetInt(
     const std::unordered_map<std::string, std::string>& params,
     const std::string& name, int* out);
 
@@ -59,7 +65,7 @@ public:
   * \param out Value will assign to out if key exists
   * \return True if key exists
   */
-  inline bool GetDouble(
+  inline static bool GetDouble(
     const std::unordered_map<std::string, std::string>& params,
     const std::string& name, double* out);
 
@@ -70,7 +76,7 @@ public:
   * \param out Value will assign to out if key exists
   * \return True if key exists
   */
-  inline bool GetBool(
+  inline static bool GetBool(
     const std::unordered_map<std::string, std::string>& params,
     const std::string& name, bool* out);
 
@@ -79,7 +85,7 @@ public:
 
 /*! \brief Types of tasks */
 enum TaskType {
-  kTrain, kPredict
+  kTrain, kPredict, kConvertModel
 };
 
 /*! \brief Config for input and output files */
@@ -90,8 +96,10 @@ public:
   int data_random_seed = 1;
   std::string data_filename = "";
   std::vector<std::string> valid_data_filenames;
+  int snapshot_freq = -1;
   std::string output_model = "LightGBM_model.txt";
   std::string output_result = "LightGBM_predict_result.txt";
+  std::string convert_model = "gbdt_prediction.cpp";
   std::string input_model = "";
   int verbosity = 1;
   int num_iteration_predict = -1;
@@ -112,7 +120,6 @@ public:
   int min_data_in_bin = 5;
   double max_conflict_rate = 0.0f;
   bool enable_bundle = true;
-  bool adjacent_bundle = false;
   bool has_header = false;
   /*! \brief Index or column name of label, default is the first column
    * And add an prefix "name:" while using column name */
@@ -133,6 +140,16 @@ public:
   * And add an prefix "name:" while using column name
   * Note: when using Index, it doesn't count the label index */
   std::string categorical_column = "";
+  std::string device_type = kDefaultDevice;
+
+  /*! \brief Set to true if want to use early stop for the prediction */
+  bool pred_early_stop = false;
+  /*! \brief Frequency of checking the pred_early_stop */
+  int pred_early_stop_freq = 10;
+  /*! \brief Threshold of margin of pred_early_stop */
+  double pred_early_stop_margin = 10.0f;
+  bool zero_as_missing = false;
+  bool use_missing = true;
   LIGHTGBM_EXPORT void Set(const std::unordered_map<std::string, std::string>& params) override;
 };
 
@@ -230,15 +247,10 @@ public:
   double other_rate = 0.1f;
   // only used for the regression. Will boost from the average labels.
   bool boost_from_average = true;
-  std::string tree_learner_type = "serial";
-  std::string device_type = "cpu";
+  std::string tree_learner_type = kDefaultTreeLearnerType;
+  std::string device_type = kDefaultDevice;
   TreeConfig tree_config;
   LIGHTGBM_EXPORT void Set(const std::unordered_map<std::string, std::string>& params) override;
-private:
-  void GetTreeLearnerType(const std::unordered_map<std::string,
-    std::string>& params);
-  void GetDeviceType(const std::unordered_map<std::string,
-    std::string>& params);
 };
 
 /*! \brief Config for Network */
@@ -262,24 +274,16 @@ public:
   bool is_parallel = false;
   bool is_parallel_find_bin = false;
   IOConfig io_config;
-  std::string boosting_type = "gbdt";
+  std::string boosting_type = kDefaultBoostingType;
   BoostingConfig boosting_config;
-  std::string objective_type = "regression";
+  std::string objective_type =  kDefaultObjectiveType;
   ObjectiveConfig objective_config;
   std::vector<std::string> metric_types;
   MetricConfig metric_config;
-
+  std::string convert_model_language = "";
   LIGHTGBM_EXPORT void Set(const std::unordered_map<std::string, std::string>& params) override;
 
 private:
-  void GetBoostingType(const std::unordered_map<std::string, std::string>& params);
-
-  void GetObjectiveType(const std::unordered_map<std::string, std::string>& params);
-
-  void GetMetricType(const std::unordered_map<std::string, std::string>& params);
-
-  void GetTaskType(const std::unordered_map<std::string, std::string>& params);
-
   void CheckParamConflict();
 };
 
@@ -341,7 +345,7 @@ inline bool ConfigBase::GetBool(
 
 struct ParameterAlias {
   static void KeyAliasTransform(std::unordered_map<std::string, std::string>* params) {
-    std::unordered_map<std::string, std::string> alias_table(
+    const std::unordered_map<std::string, std::string> alias_table(
     {
       { "config", "config_file" },
       { "nthread", "num_threads" },
@@ -365,7 +369,7 @@ struct ParameterAlias {
       { "is_sparse", "is_enable_sparse" },
       { "enable_sparse", "is_enable_sparse" },
       { "pre_partition", "is_pre_partition" },
-      { "tranining_metric", "is_training_metric" },
+      { "training_metric", "is_training_metric" },
       { "train_metric", "is_training_metric" },
       { "ndcg_at", "ndcg_eval_at" },
       { "eval_at", "ndcg_eval_at" },
@@ -419,12 +423,46 @@ struct ParameterAlias {
       { "reg_alpha", "lambda_l1" },
       { "reg_lambda", "lambda_l2" },
       { "num_classes", "num_class" },
-      { "unbalanced_sets", "is_unbalance" }
+      { "unbalanced_sets", "is_unbalance" },
+      { "bagging_fraction_seed", "bagging_seed" }, 
+      { "num_boost_round", "num_iterations" }
+    });
+    const std::unordered_set<std::string> parameter_set({
+      "config", "config_file", "task", "device",
+      "num_threads", "seed", "boosting_type", "objective", "data",
+      "output_model", "input_model", "output_result", "valid_data",
+      "is_enable_sparse", "is_pre_partition", "is_training_metric",
+      "ndcg_eval_at", "min_data_in_leaf", "min_sum_hessian_in_leaf",
+      "num_leaves", "feature_fraction", "num_iterations",
+      "bagging_fraction", "bagging_freq", "learning_rate", "tree_learner",
+      "num_machines", "local_listen_port", "use_two_round_loading",
+      "machine_list_file", "is_save_binary_file", "early_stopping_round",
+      "verbose", "has_header", "label_column", "weight_column", "group_column",
+      "ignore_column", "categorical_column", "is_predict_raw_score",
+      "is_predict_leaf_index", "min_gain_to_split", "top_k",
+      "lambda_l1", "lambda_l2", "num_class", "is_unbalance",
+      "max_depth", "subsample_for_bin", "max_bin", "bagging_seed",
+      "drop_rate", "skip_drop", "max_drop", "uniform_drop",
+      "xgboost_dart_mode", "drop_seed", "top_rate", "other_rate",
+      "min_data_in_bin", "data_random_seed", "bin_construct_sample_cnt",
+      "num_iteration_predict", "pred_early_stop", "pred_early_stop_freq",
+      "pred_early_stop_margin", "use_missing", "sigmoid", "huber_delta",
+      "fair_c", "poission_max_delta_step", "scale_pos_weight",
+      "boost_from_average", "max_position", "label_gain",
+      "metric", "metric_freq", "time_out",
+      "gpu_platform_id", "gpu_device_id", "gpu_use_dp",
+      "convert_model", "convert_model_language", 
+      "feature_fraction_seed", "enable_bundle", "data_filename", "valid_data_filenames",
+      "snapshot_freq", "verbosity", "sparse_threshold", "enable_load_from_binary_file",
+      "max_conflict_rate", "poisson_max_delta_step", "gaussian_eta",
+      "histogram_pool_size", "output_freq", "is_provide_training_metric", "machine_list_filename", "zero_as_missing"
     });
     std::unordered_map<std::string, std::string> tmp_map;
     for (const auto& pair : *params) {
       if (alias_table.count(pair.first) > 0) {
-        tmp_map[alias_table[pair.first]] = pair.second;
+        tmp_map[alias_table.at(pair.first)] = pair.second;
+      } else if (parameter_set.count(pair.first) == 0) {
+        Log::Fatal("Unknown parameter: %s", pair.first.c_str());
       }
     }
     for (const auto& pair : tmp_map) {

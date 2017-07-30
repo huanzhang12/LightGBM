@@ -39,10 +39,12 @@ public:
     sum_weight_ = 0.0f;
   }
 
-  void ResetTrainingData(const BoostingConfig* config, const Dataset* train_data, const ObjectiveFunction* objective_function,
-                         const std::vector<const Metric*>& training_metrics) override {
-    GBDT::ResetTrainingData(config, train_data, objective_function, training_metrics);
+  void ResetConfig(const BoostingConfig* config) override {
+    GBDT::ResetConfig(config);
+    random_for_drop_ = Random(gbdt_config_->drop_seed);
+    sum_weight_ = 0.0f;
   }
+
   /*!
   * \brief one training iteration
   */

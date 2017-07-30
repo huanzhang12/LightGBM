@@ -41,9 +41,9 @@ train_data = lgb.Dataset('train.svm.bin')
 
 ####  To load a numpy array into ```Dataset```:
 ```python
-data = np.random.rand(500,10) # 500 entities, each contains 10 features
+data = np.random.rand(500, 10) # 500 entities, each contains 10 features
 label = np.random.randint(2, size=500) # binary target
-train_data = lgb.Dataset( data, label=label)
+train_data = lgb.Dataset(data, label=label)
 ```
 #### To load a scpiy.sparse.csr_matrix array into ```Dataset```:
 ```python
@@ -53,7 +53,7 @@ train_data = lgb.Dataset(csr)
 #### Saving ```Dataset``` into a LightGBM binary file will make loading faster:
 ```python
 train_data = lgb.Dataset('train.svm.txt')
-train_data.save_binary("train.bin")
+train_data.save_binary('train.bin')
 ```
 #### Create validation data
 ```python
@@ -104,7 +104,7 @@ Setting Parameters
 LightGBM can use either a list of pairs or a dictionary to set [parameters](./Parameters.md). For instance:
 * Booster parameters
 ```python
-param = {'num_leaves':31, 'num_trees':100, 'objective':'binary' }
+param = {'num_leaves':31, 'num_trees':100, 'objective':'binary'}
 param['metric'] = 'auc'
 ```
 * You can also specify multiple eval metrics:
@@ -119,7 +119,7 @@ Training
 Training a model requires a parameter list and data set.
 ```python
 num_round = 10
-bst = lgb.train(param, train_data, num_round, valid_sets=[test_data] )
+bst = lgb.train(param, train_data, num_round, valid_sets=[test_data])
 ```
 After training, the model can be saved.
 ```python
@@ -132,7 +132,7 @@ json_model = bst.dump_model()
 ```
 A saved model can be loaded as follows:
 ```python
-bst = lgb.Booster(model_file="model.txt") #init model
+bst = lgb.Booster(model_file='model.txt') #init model
 ```
 
 CV
@@ -149,7 +149,7 @@ If you have a validation set, you can use early stopping to find the optimal num
 Early stopping requires at least one set in `valid_sets`. If there's more than one, it will use all of them.
 
 ```python
-bst = train(param, train_data, num_round, valid_sets=valid_sets, early_stopping_rounds=10)
+bst = lgb.train(param, train_data, num_round, valid_sets=valid_sets, early_stopping_rounds=10)
 bst.save_model('model.txt', num_iteration=bst.best_iteration)
 ```
 
@@ -170,5 +170,5 @@ ypred = bst.predict(data)
 
 If early stopping is enabled during training, you can get predictions from the best iteration with `bst.best_iteration`:
 ```python
-ypred = bst.predict(data,num_iteration=bst.best_iteration)
+ypred = bst.predict(data, num_iteration=bst.best_iteration)
 ```

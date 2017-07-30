@@ -22,7 +22,7 @@ def _load_lib():
     """Load LightGBM Library."""
     lib_path = find_lib_path()
     if len(lib_path) == 0:
-        raise Exception("cannot find LightGBM library")
+        return None
     lib = ctypes.cdll.LoadLibrary(lib_path[0])
     lib.LGBM_GetLastError.restype = ctypes.c_char_p
     return lib
@@ -66,7 +66,7 @@ def is_numpy_1d_array(data):
 def is_1d_list(data):
     """Check is 1d list"""
     return isinstance(data, list) and \
-        (not data or isinstance(data[0], numeric_types))
+        (not data or is_numeric(data[0]))
 
 
 def list_to_1d_numpy(data, dtype=np.float32, name='list'):
@@ -296,7 +296,7 @@ class _InnerPredictor(object):
     Only used for prediction, usually used for continued-train
     Note: Can convert from Booster, but cannot convert to Booster
     """
-    def __init__(self, model_file=None, booster_handle=None):
+    def __init__(self, model_file=None, booster_handle=None, pred_parameter=None):
         """Initialize the _InnerPredictor. Not expose to user
 
         Parameters
@@ -305,6 +305,8 @@ class _InnerPredictor(object):
             Path to the model file.
         booster_handle : Handle of Booster
             use handle to init
+        pred_parameter: dict
+            Other parameters for the prediciton
         """
         self.handle = ctypes.c_void_p()
         self.__is_manage_handle = True
@@ -338,6 +340,9 @@ class _InnerPredictor(object):
             self.pandas_categorical = None
         else:
             raise TypeError('Need Model file or Booster handle to create a predictor')
+
+        pred_parameter = {} if pred_parameter is None else pred_parameter
+        self.pred_parameter = param_dict_to_str(pred_parameter)
 
     def __del__(self):
         if self.__is_manage_handle:
@@ -385,6 +390,7 @@ class _InnerPredictor(object):
         int_data_has_header = 1 if data_has_header else 0
         if num_iteration > self.num_total_iteration:
             num_iteration = self.num_total_iteration
+
         if isinstance(data, string_type):
             with _temp_file() as f:
                 _safe_call(_LIB.LGBM_BoosterPredictForFile(
@@ -393,6 +399,7 @@ class _InnerPredictor(object):
                     ctypes.c_int(int_data_has_header),
                     ctypes.c_int(predict_type),
                     ctypes.c_int(num_iteration),
+                    c_str(self.pred_parameter),
                     c_str(f.name)))
                 lines = f.readlines()
                 nrow = len(lines)
@@ -407,16 +414,21 @@ class _InnerPredictor(object):
         elif isinstance(data, np.ndarray):
             preds, nrow = self.__pred_for_np2d(data, num_iteration,
                                                predict_type)
-        elif isinstance(data, DataFrame):
-            preds, nrow = self.__pred_for_np2d(data.values, num_iteration,
+        elif isinstance(data, list):
+            try:
+                data = np.array(data)
+            except:
+                raise ValueError('Cannot convert data list to numpy array.')
+            preds, nrow = self.__pred_for_np2d(data, num_iteration,
                                                predict_type)
         else:
             try:
+                warnings.warn('Converting data to scipy sparse matrix.')
                 csr = scipy.sparse.csr_matrix(data)
-                preds, nrow = self.__pred_for_csr(csr, num_iteration,
-                                                  predict_type)
             except:
                 raise TypeError('Cannot predict data for type {}'.format(type(data).__name__))
+            preds, nrow = self.__pred_for_csr(csr, num_iteration,
+                                              predict_type)
         if pred_leaf:
             preds = preds.astype(np.int32)
         if is_reshape and preds.size != nrow:
@@ -445,7 +457,7 @@ class _InnerPredictor(object):
         Predict for a 2-D numpy matrix.
         """
         if len(mat.shape) != 2:
-            raise ValueError('Input numpy.ndarray must be 2 dimensional')
+            raise ValueError('Input numpy.ndarray or list must be 2 dimensional')
 
         if mat.dtype == np.float32 or mat.dtype == np.float64:
             data = np.array(mat.reshape(mat.size), dtype=mat.dtype, copy=False)
@@ -466,6 +478,7 @@ class _InnerPredictor(object):
             ctypes.c_int(C_API_IS_ROW_MAJOR),
             ctypes.c_int(predict_type),
             ctypes.c_int(num_iteration),
+            c_str(self.pred_parameter),
             ctypes.byref(out_num_preds),
             preds.ctypes.data_as(ctypes.POINTER(ctypes.c_double))))
         if n_preds != out_num_preds.value:
@@ -496,6 +509,7 @@ class _InnerPredictor(object):
             ctypes.c_int64(csr.shape[1]),
             ctypes.c_int(predict_type),
             ctypes.c_int(num_iteration),
+            c_str(self.pred_parameter),
             ctypes.byref(out_num_preds),
             preds.ctypes.data_as(ctypes.POINTER(ctypes.c_double))))
         if n_preds != out_num_preds.value:
@@ -526,6 +540,7 @@ class _InnerPredictor(object):
             ctypes.c_int64(csc.shape[0]),
             ctypes.c_int(predict_type),
             ctypes.c_int(num_iteration),
+            c_str(self.pred_parameter),
             ctypes.byref(out_num_preds),
             preds.ctypes.data_as(ctypes.POINTER(ctypes.c_double))))
         if n_preds != out_num_preds.value:
@@ -833,6 +848,8 @@ class Dataset(object):
         params : dict
             Other parameters
         """
+        if params is None:
+            params = self.params
         ret = Dataset(None, reference=self, feature_name=self.feature_name,
                       categorical_feature=self.categorical_feature, params=params)
         ret._predictor = self._predictor
@@ -1109,7 +1126,7 @@ class Dataset(object):
 
     def get_group(self):
         """
-        Get the initial score of the Dataset.
+        Get the group of the Dataset.
 
         Returns
         -------
@@ -1230,7 +1247,7 @@ class Booster(object):
             self.__num_class = out_num_class.value
             self.pandas_categorical = _load_pandas_categorical(model_file)
         elif 'model_str' in params:
-            self.__load_model_from_string(params['model_str'])
+            self._load_model_from_string(params['model_str'])
         else:
             raise TypeError('Need at least one training dataset or model file to create booster instance')
 
@@ -1242,7 +1259,7 @@ class Booster(object):
         return self.__deepcopy__(None)
 
     def __deepcopy__(self, _):
-        model_str = self.__save_model_to_string()
+        model_str = self._save_model_to_string()
         booster = Booster({'model_str': model_str})
         booster.pandas_categorical = self.pandas_categorical
         return booster
@@ -1253,7 +1270,7 @@ class Booster(object):
         this.pop('train_set', None)
         this.pop('valid_sets', None)
         if handle is not None:
-            this["handle"] = self.__save_model_to_string()
+            this["handle"] = self._save_model_to_string()
         return this
 
     def __setstate__(self, state):
@@ -1271,6 +1288,7 @@ class Booster(object):
     def free_dataset(self):
         self.__dict__.pop('train_set', None)
         self.__dict__.pop('valid_sets', None)
+        self.__num_dataset = 0
 
     def set_train_data_name(self, name):
         self.__train_data_name = name
@@ -1490,7 +1508,7 @@ class Booster(object):
             c_str(filename)))
         _save_pandas_categorical(filename, self.pandas_categorical)
 
-    def __load_model_from_string(self, model_str):
+    def _load_model_from_string(self, model_str):
         """[Private] Load model from string"""
         out_num_iterations = ctypes.c_int(0)
         _safe_call(_LIB.LGBM_BoosterLoadModelFromString(
@@ -1503,7 +1521,7 @@ class Booster(object):
             ctypes.byref(out_num_class)))
         self.__num_class = out_num_class.value
 
-    def __save_model_to_string(self, num_iteration=-1):
+    def _save_model_to_string(self, num_iteration=-1):
         """[Private] Save model to string"""
         if num_iteration <= 0:
             num_iteration = self.best_iteration
@@ -1568,7 +1586,8 @@ class Booster(object):
                 ptr_string_buffer))
         return json.loads(string_buffer.value.decode())
 
-    def predict(self, data, num_iteration=-1, raw_score=False, pred_leaf=False, data_has_header=False, is_reshape=True):
+    def predict(self, data, num_iteration=-1, raw_score=False, pred_leaf=False, data_has_header=False, is_reshape=True,
+                pred_parameter=None):
         """
         Predict logic
 
@@ -1587,19 +1606,30 @@ class Booster(object):
             Used for txt data
         is_reshape : bool
             Reshape to (nrow, ncol) if true
+        pred_parameter: dict
+            Other parameters for the prediction
 
         Returns
         -------
         Prediction result
         """
-        predictor = self._to_predictor()
+        predictor = self._to_predictor(pred_parameter)
         if num_iteration <= 0:
             num_iteration = self.best_iteration
         return predictor.predict(data, num_iteration, raw_score, pred_leaf, data_has_header, is_reshape)
 
-    def _to_predictor(self):
+    def get_leaf_output(self, tree_id, leaf_id):
+        ret = ctypes.c_double(0)
+        _safe_call(_LIB.LGBM_BoosterGetLeafValue(
+            self.handle,
+            ctypes.c_int(tree_id),
+            ctypes.c_int(leaf_id),
+            ctypes.byref(ret)))
+        return ret.value
+
+    def _to_predictor(self, pred_parameter=None):
         """Convert to predictor"""
-        predictor = _InnerPredictor(booster_handle=self.handle)
+        predictor = _InnerPredictor(booster_handle=self.handle, pred_parameter=pred_parameter)
         predictor.pandas_categorical = self.pandas_categorical
         return predictor
 
@@ -1637,9 +1667,9 @@ class Booster(object):
         Parameters
         ----------
         importance_type : str, default "split"
-        How the importance is calculated: "split" or "gain"
-        "split" is the number of times a feature is used in a model
-        "gain" is the total gain of splits which use the feature
+            How the importance is calculated: "split" or "gain"
+            "split" is the number of times a feature is used in a model
+            "gain" is the total gain of splits which use the feature
 
         Returns
         -------
@@ -1653,10 +1683,11 @@ class Booster(object):
 
         def dfs(root):
             if "split_feature" in root:
-                if importance_type == 'split':
-                    ret[root["split_feature"]] += 1
-                elif importance_type == 'gain':
-                    ret[root["split_feature"]] += root["split_gain"]
+                if root['split_gain'] > 0:
+                    if importance_type == 'split':
+                        ret[root["split_feature"]] += 1
+                    elif importance_type == 'gain':
+                        ret[root["split_feature"]] += root["split_gain"]
                 dfs(root["left_child"])
                 dfs(root["right_child"])
         for tree in dump_model["tree_info"]:

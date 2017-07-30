@@ -13,6 +13,7 @@ namespace LightGBM {
 class Dataset;
 class ObjectiveFunction;
 class Metric;
+struct PredictionEarlyStopInstance;
 
 /*!
 * \brief The interface for Boosting
@@ -42,14 +43,10 @@ public:
   */
   virtual void MergeFrom(const Boosting* other) = 0;
 
-  /*!
-  * \brief Reset training data for current boosting
-  * \param config Configs for boosting
-  * \param train_data Training data
-  * \param objective_function Training objective function
-  * \param training_metrics Training metric
-  */
-  virtual void ResetTrainingData(const BoostingConfig* config, const Dataset* train_data, const ObjectiveFunction* objective_function, const std::vector<const Metric*>& training_metrics) = 0;
+  virtual void ResetTrainingData(const Dataset* train_data, const ObjectiveFunction* objective_function,
+                                 const std::vector<const Metric*>& training_metrics) = 0;
+
+  virtual void ResetConfig(const BoostingConfig* config) = 0;
 
   /*!
   * \brief Add a validation data
@@ -116,15 +113,19 @@ public:
   * \brief Prediction for one record, not sigmoid transform
   * \param feature_values Feature value on this record
   * \param output Prediction result for this record
+  * \param early_stop Early stopping instance. If nullptr, no early stopping is applied and all trees are evaluated.
   */
-  virtual void PredictRaw(const double* features, double* output) const = 0;
+  virtual void PredictRaw(const double* features, double* output,
+                          const PredictionEarlyStopInstance* early_stop) const = 0;
 
   /*!
   * \brief Prediction for one record, sigmoid transformation will be used if needed
   * \param feature_values Feature value on this record
   * \param output Prediction result for this record
+  * \param early_stop Early stopping instance. If nullptr, no early stopping is applied and all trees are evaluated.
   */
-  virtual void Predict(const double* features, double* output) const = 0;
+  virtual void Predict(const double* features, double* output,
+                       const PredictionEarlyStopInstance* early_stop) const = 0;
   
   /*!
   * \brief Prediction for one record with leaf index
@@ -136,9 +137,25 @@ public:
 
   /*!
   * \brief Dump model to json format string
+  * \param num_iteration Number of iterations that want to dump, -1 means dump all
   * \return Json format string of model
   */
   virtual std::string DumpModel(int num_iteration) const = 0;
+
+  /*!
+  * \brief Translate model to if-else statement
+  * \param num_iteration Number of iterations that want to translate, -1 means translate all
+  * \return if-else format codes of model
+  */
+  virtual std::string ModelToIfElse(int num_iteration) const = 0;
+
+  /*!
+  * \brief Translate model to if-else statement
+  * \param num_iteration Number of iterations that want to translate, -1 means translate all
+  * \param filename Filename that want to save to
+  * \return is_finish Is training finished or not
+  */
+  virtual bool SaveModelToIfElse(int num_iteration, const char* filename) const = 0;
 
   /*!
   * \brief Save model to file
@@ -198,6 +215,9 @@ public:
   * \return Number of classes
   */
   virtual int NumberOfClasses() const = 0;
+
+  /*! \brief The prediction should be accurate or not. True will disable early stopping for prediction. */
+  virtual bool NeedAccuratePrediction() const = 0;
 
   /*!
   * \brief Initial work for the prediction

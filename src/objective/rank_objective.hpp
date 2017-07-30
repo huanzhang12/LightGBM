@@ -47,6 +47,7 @@ public:
     num_data_ = num_data;
     // get label
     label_ = metadata.label();
+    DCGCalculator::CheckLabel(label_, num_data_);
     // get weights
     weights_ = metadata.weights();
     // get boundries
@@ -206,6 +207,8 @@ public:
     str_buf << GetName();
     return str_buf.str();
   }
+
+  bool NeedAccuratePrediction() const override { return false; }
 
 private:
   /*! \brief Gains for labels */

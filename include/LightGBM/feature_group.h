@@ -49,6 +49,30 @@ public:
     bin_data_.reset(Bin::CreateBin(num_data, num_total_bin_,
       sparse_rate, is_enable_sparse, sparse_threshold, &is_sparse_));
   }
+
+  FeatureGroup(int num_feature,
+               std::vector<std::unique_ptr<BinMapper>>& bin_mappers,
+               data_size_t num_data, bool is_sparse) : num_feature_(num_feature) {
+    CHECK(static_cast<int>(bin_mappers.size()) == num_feature);
+    // use bin at zero to store default_bin
+    num_total_bin_ = 1;
+    bin_offsets_.emplace_back(num_total_bin_);
+    for (int i = 0; i < num_feature_; ++i) {
+      bin_mappers_.emplace_back(bin_mappers[i].release());
+      auto num_bin = bin_mappers_[i]->num_bin();
+      if (bin_mappers_[i]->GetDefaultBin() == 0) {
+        num_bin -= 1;
+      }
+      num_total_bin_ += num_bin;
+      bin_offsets_.emplace_back(num_total_bin_);
+    }
+    is_sparse_ = is_sparse;
+    if (is_sparse_) {
+      bin_data_.reset(Bin::CreateSparseBin(num_data, num_total_bin_));
+    } else {
+      bin_data_.reset(Bin::CreateDenseBin(num_data, num_total_bin_));
+    }
+  }
   /*!
   * \brief Constructor from memory
   * \param memory Pointer of memory
@@ -137,13 +161,15 @@ public:
   inline data_size_t Split(
     int sub_feature,
     uint32_t threshold,
+    bool default_left,
     data_size_t* data_indices, data_size_t num_data,
     data_size_t* lte_indices, data_size_t* gt_indices) const {
 
     uint32_t min_bin = bin_offsets_[sub_feature];
     uint32_t max_bin = bin_offsets_[sub_feature + 1] - 1;
     uint32_t default_bin = bin_mappers_[sub_feature]->GetDefaultBin();
-    return bin_data_->Split(min_bin, max_bin, default_bin,
+    auto missing_type = bin_mappers_[sub_feature]->missing_type();
+    return bin_data_->Split(min_bin, max_bin, default_bin, missing_type, default_left,
       threshold, data_indices, num_data, lte_indices, gt_indices, bin_mappers_[sub_feature]->bin_type());
   }
   /*!

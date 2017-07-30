@@ -2,6 +2,7 @@
 #define LIGHTGBM_UTILS_COMMON_FUN_H_
 
 #include <LightGBM/utils/log.h>
+#include <LightGBM/utils/openmp_wrapper.h>
 
 #include <cstdio>
 #include <string>
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <iterator>
 #include <type_traits>
 #include <iomanip>
 
@@ -42,6 +44,7 @@ inline static std::string& RemoveQuotationSymbol(std::string& str) {
   str.erase(0, str.find_first_not_of("'\""));
   return str;
 }
+
 inline static bool StartsWith(const std::string& str, const std::string prefix) {
   if (str.substr(0, prefix.size()) == prefix) {
     return true;
@@ -49,32 +52,79 @@ inline static bool StartsWith(const std::string& str, const std::string prefix) 
     return false;
   }
 }
+
 inline static std::vector<std::string> Split(const char* c_str, char delimiter) {
   std::vector<std::string> ret;
   std::string str(c_str);
   size_t i = 0;
-  size_t pos = str.find(delimiter);
-  while (pos != std::string::npos) {
-    ret.push_back(str.substr(i, pos - i));
-    i = ++pos;
-    pos = str.find(delimiter, pos);
+  size_t pos = 0;
+  while (pos < str.length()) {
+    if (str[pos] == delimiter) {
+      if (i < pos) {
+        ret.push_back(str.substr(i, pos - i));
+      }
+      ++pos;
+      i = pos;
+    } else {
+      ++pos;
+    }
   }
-  ret.push_back(str.substr(i));
+  if (i < pos) {
+    ret.push_back(str.substr(i));
+  }
+  return ret;
+}
+
+inline static std::vector<std::string> SplitLines(const char* c_str) {
+  std::vector<std::string> ret;
+  std::string str(c_str);
+  size_t i = 0;
+  size_t pos = 0;
+  while (pos < str.length()) {
+    if (str[pos] == '\n' || str[pos] == '\r') {
+      if (i < pos) {
+        ret.push_back(str.substr(i, pos - i));
+      }
+      // skip the line endings
+      while (str[pos] == '\n' || str[pos] == '\r') ++pos;
+      // new begin
+      i = pos;
+    } else {
+      ++pos;
+    }
+  }
+  if (i < pos) {
+    ret.push_back(str.substr(i));
+  }
   return ret;
 }
 
 inline static std::vector<std::string> Split(const char* c_str, const char* delimiters) {
-  // will split when met any chars in delimiters
   std::vector<std::string> ret;
   std::string str(c_str);
   size_t i = 0;
-  size_t pos = str.find_first_of(delimiters);
-  while (pos != std::string::npos) {
-    ret.push_back(str.substr(i, pos - i));
-    i = ++pos;
-    pos = str.find_first_of(delimiters, pos);
+  size_t pos = 0;
+  while (pos < str.length()) {
+    bool met_delimiters = false;
+    for (int j = 0; delimiters[j] != '\0'; ++j) {
+      if (str[pos] == delimiters[j]) {
+        met_delimiters = true;
+        break;
+      }
+    }
+    if (met_delimiters) {
+      if (i < pos) {
+        ret.push_back(str.substr(i, pos - i));
+      }
+      ++pos;
+      i = pos;
+    } else {
+      ++pos;
+    }
   }
-  ret.push_back(str.substr(i));
+  if (i < pos) {
+    ret.push_back(str.substr(i));
+  }
   return ret;
 }
 
@@ -183,7 +233,7 @@ inline static const char* Atof(const char* p, double* out) {
       std::string tmp_str(p, cnt);
       std::transform(tmp_str.begin(), tmp_str.end(), tmp_str.begin(), Common::tolower);
       if (tmp_str == std::string("na") || tmp_str == std::string("nan")) {
-        *out = 0;
+        *out = NAN;
       } else if (tmp_str == std::string("inf") || tmp_str == std::string("infinity")) {
         *out = sign * 1e308;
       } else {
@@ -460,6 +510,98 @@ inline static std::vector<int> VectorSize(const std::vector<std::vector<T>>& dat
     ret[i] = static_cast<int>(data[i].size());
   }
   return ret;
+}
+
+inline static double AvoidInf(double x) {
+  if (x >= 1e300) {
+    return 1e300;
+  } else if(x <= -1e300) {
+    return -1e300;
+  } else {
+    return x;
+  }
+}
+
+template<class _Iter> inline
+static typename std::iterator_traits<_Iter>::value_type* IteratorValType(_Iter) {
+  return (0);
+}
+
+template<class _RanIt, class _Pr, class _VTRanIt> inline
+static void ParallelSort(_RanIt _First, _RanIt _Last, _Pr _Pred, _VTRanIt*) {
+  size_t len = _Last - _First;
+  const size_t kMinInnerLen = 1024;
+  int num_threads = 1;
+  #pragma omp parallel
+  #pragma omp master
+  {
+    num_threads = omp_get_num_threads();
+  }
+  if (len <= kMinInnerLen || num_threads <= 1) {
+    std::sort(_First, _Last, _Pred);
+    return;
+  }
+  size_t inner_size = (len + num_threads - 1) / num_threads;
+  inner_size = std::max(inner_size, kMinInnerLen);
+  num_threads = static_cast<int>((len + inner_size - 1) / inner_size);
+  #pragma omp parallel for schedule(static,1)
+  for (int i = 0; i < num_threads; ++i) {
+    size_t left = inner_size*i;
+    size_t right = left + inner_size;
+    right = std::min(right, len);
+    if (right > left) {
+      std::sort(_First + left, _First + right, _Pred);
+    }
+  }
+  // Buffer for merge.
+  std::vector<_VTRanIt> temp_buf(len);
+  _RanIt buf = temp_buf.begin();
+  size_t s = inner_size;
+  // Recursive merge
+  while (s < len) {
+    int loop_size = static_cast<int>((len + s * 2 - 1) / (s * 2));
+    #pragma omp parallel for schedule(static,1)
+    for (int i = 0; i < loop_size; ++i) {
+      size_t left = i * 2 * s;
+      size_t mid = left + s;
+      size_t right = mid + s;
+      right = std::min(len, right);
+      if (mid >= right) { continue; }
+      std::copy(_First + left, _First + mid, buf + left);
+      std::merge(buf + left, buf + mid, _First + mid, _First + right, _First + left, _Pred);
+    }
+    s *= 2;
+  }
+}
+
+template<class _RanIt, class _Pr> inline
+static void ParallelSort(_RanIt _First, _RanIt _Last, _Pr _Pred) {
+  return ParallelSort(_First, _Last, _Pred, IteratorValType(_First));
+}
+
+// Check that all y[] are in interval [ymin, ymax] (end points included); throws error if not
+inline void check_elements_interval_closed(const float *y, float ymin, float ymax, int ny, const char *callername) {
+  for (int i = 0; i < ny; ++i) {
+    if (y[i] < ymin || y[i] > ymax) {
+      Log::Fatal("[%s]: does not tolerate element [#%i = %f] outside [%f, %f]", callername, i, y[i], ymin, ymax);
+    }
+  }
+}
+
+// One-pass scan over array w with nw elements: find min, max and sum of elements;
+// this is useful for checking weight requirements.
+inline void obtain_min_max_sum(const float *w, int nw, float *mi, float *ma, double *su) {
+  float minw = w[0];
+  float maxw = w[0];
+  double sumw = static_cast<double>(w[0]);
+  for (int i = 1; i < nw; ++i) {
+    sumw += w[i];
+    if (w[i] < minw) minw = w[i];
+    if (w[i] > maxw) maxw = w[i];
+  }
+  if (mi != nullptr) *mi = minw;
+  if (ma != nullptr) *ma = maxw;
+  if (su != nullptr) *su = sumw;
 }
 
 }  // namespace Common

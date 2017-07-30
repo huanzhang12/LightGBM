@@ -58,7 +58,7 @@ public:
 protected:
   void BeforeTrain() override;
   bool BeforeFindBestSplit(const Tree* tree, int left_leaf, int right_leaf) override;
-  void FindBestThresholds() override;
+  void FindBestSplits() override;
   void Split(Tree* tree, int best_Leaf, int* left_leaf, int* right_leaf) override;
   void ConstructHistograms(const std::vector<int8_t>& is_feature_used, bool use_subtract) override;
 private:
@@ -98,6 +98,13 @@ private:
   * \brief Compile OpenCL GPU source code to kernel binaries
   */
   void BuildGPUKernels();
+  
+  /*!
+   * \brief Returns OpenCL kernel build log when compiled with option opts
+   * \param opts OpenCL build options 
+   * \return OpenCL build log
+  */
+  std::string GetBuildLog(const std::string &opts);
 
   /*!
   * \brief Setup GPU kernel arguments, preparing for launching
@@ -260,6 +267,7 @@ namespace LightGBM {
     
 class GPUTreeLearner: public SerialTreeLearner {
 public:
+  #pragma warning(disable : 4702)
   explicit GPUTreeLearner(const TreeConfig* tree_config) : SerialTreeLearner(tree_config) {
     Log::Fatal("GPU Tree Learner was not enabled in this build. Recompile with CMake option -DUSE_GPU=1");
   }

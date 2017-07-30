@@ -2,6 +2,9 @@
 #define LIGHTGBM_BOOSTING_GBDT_H_
 
 #include <LightGBM/boosting.h>
+#include <LightGBM/objective_function.h>
+#include <LightGBM/prediction_early_stop.h>
+
 #include "score_updater.hpp"
 
 #include <cstdio>
@@ -60,14 +63,10 @@ public:
     num_iteration_for_pred_ = static_cast<int>(models_.size()) / num_tree_per_iteration_;
   }
 
-  /*!
-  * \brief Reset training data for current boosting
-  * \param train_data Training data
-  * \param objective_function Training objective function
-  * \param training_metrics Training metric
-  */
-  void ResetTrainingData(const BoostingConfig* config, const Dataset* train_data, const ObjectiveFunction* objective_function, const std::vector<const Metric*>& training_metrics) override;
+  void ResetTrainingData(const Dataset* train_data, const ObjectiveFunction* objective_function,
+                         const std::vector<const Metric*>& training_metrics) override;
 
+  void ResetConfig(const BoostingConfig* config) override;
   /*!
   * \brief Adding a validation dataset
   * \param valid_data Validation dataset
@@ -92,6 +91,14 @@ public:
   int GetCurrentIteration() const override { return static_cast<int>(models_.size()) / num_tree_per_iteration_; }
 
   bool EvalAndCheckEarlyStopping() override;
+
+  bool NeedAccuratePrediction() const override { 
+    if (objective_function_ == nullptr) {
+      return true;
+    } else {
+      return objective_function_->NeedAccuratePrediction();
+    }
+  }
 
   /*!
   * \brief Get evaluation result at data_idx data
@@ -136,23 +143,41 @@ public:
     return num_preb_in_one_row;
   }
 
-  void PredictRaw(const double* features, double* output) const override;
+  void PredictRaw(const double* features, double* output,
+                  const PredictionEarlyStopInstance* earlyStop) const override;
 
-  void Predict(const double* features, double* output) const override;
+  void Predict(const double* features, double* output,
+               const PredictionEarlyStopInstance* earlyStop) const override;
 
   void PredictLeafIndex(const double* features, double* output) const override;
 
   /*!
   * \brief Dump model to json format string
+  * \param num_iteration Number of iterations that want to dump, -1 means dump all
   * \return Json format string of model
   */
   std::string DumpModel(int num_iteration) const override;
 
   /*!
+  * \brief Translate model to if-else statement
+  * \param num_iteration Number of iterations that want to translate, -1 means translate all
+  * \return if-else format codes of model
+  */
+  std::string ModelToIfElse(int num_iteration) const override;
+
+  /*!
+  * \brief Translate model to if-else statement
+  * \param num_iteration Number of iterations that want to translate, -1 means translate all
+  * \param filename Filename that want to save to
+  * \return is_finish Is training finished or not
+  */
+  bool SaveModelToIfElse(int num_iteration, const char* filename) const override;
+
+  /*!
   * \brief Save model to file
   * \param num_used_model Number of model that want to save, -1 means save all
-  * \param is_finish Is training finished or not
   * \param filename Filename that want to save to
+  * \return is_finish Is training finished or not
   */
   virtual bool SaveModelToFile(int num_iterations, const char* filename) const override;
 
@@ -229,6 +254,7 @@ public:
   virtual const char* SubModelName() const override { return "tree"; }
 
 protected:
+  void ResetBaggingConfig(const BoostingConfig* config);
   /*!
   * \brief Implement bagging logic
   * \param iter Current interation
@@ -249,17 +275,19 @@ protected:
   * \param tree Trained tree of this iteration
   * \param cur_tree_id Current tree for multiclass training
   */
-  void UpdateScoreOutOfBag(const Tree* tree, const int cur_tree_id);
+  virtual void UpdateScoreOutOfBag(const Tree* tree, const int cur_tree_id);
   /*!
   * \brief calculate the object function
   */
-  void Boosting();
+  virtual void Boosting();
   /*!
   * \brief updating score after tree was trained
   * \param tree Trained tree of this iteration
   * \param cur_tree_id Current tree for multiclass training
   */
   virtual void UpdateScore(const Tree* tree, const int cur_tree_id);
+
+  virtual std::vector<double> EvalOneMetric(const Metric* metric, const double* score) const;
   /*!
   * \brief Print metric result of current iteration
   * \param iter Current interation
@@ -347,7 +375,7 @@ protected:
   std::vector<double> class_default_output_;
   bool is_constant_hessian_;
   std::unique_ptr<ObjectiveFunction> loaded_objective_;
-
+  bool average_output_;
 };
 
 }  // namespace LightGBM

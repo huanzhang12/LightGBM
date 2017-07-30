@@ -1,6 +1,7 @@
 # coding: utf-8
 # pylint: skip-file
 import os
+import subprocess
 import tempfile
 import unittest
 
@@ -43,6 +44,7 @@ class TestBasic(unittest.TestCase):
         self.assertEqual(len(pred_from_matr), len(pred_from_file))
         for preds in zip(pred_from_matr, pred_from_file):
             self.assertAlmostEqual(*preds, places=15)
+
         # check saved model persistence
         bst = lgb.Booster(params, model_file="model.txt")
         pred_from_model_file = bst.predict(X_test)
@@ -50,10 +52,14 @@ class TestBasic(unittest.TestCase):
         for preds in zip(pred_from_matr, pred_from_model_file):
             # we need to check the consistency of model file here, so test for exact equal
             self.assertEqual(*preds)
+
+        # check early stopping is working. Make it stop very early, so the scores should be very close to zero
+        pred_parameter = {"pred_early_stop": True, "pred_early_stop_freq": 5, "pred_early_stop_margin": 1.5}
+        pred_early_stopping = bst.predict(X_test, pred_parameter=pred_parameter)
+        self.assertEqual(len(pred_from_matr), len(pred_early_stopping))
+        for preds in zip(pred_early_stopping, pred_from_matr):
+            # scores likely to be different, but prediction should still be the same
+            self.assertEqual(preds[0] > 0, preds[1] > 0)
+
         # check pmml
-        os.system('python ../../pmml/pmml.py model.txt')
-
-
-print("----------------------------------------------------------------------")
-print("running test_basic.py")
-unittest.main()
+        subprocess.call(['python', os.path.join(os.path.dirname(os.path.realpath(__file__)), '../../pmml/pmml.py'), 'model.txt'])

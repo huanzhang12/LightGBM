@@ -1,8 +1,13 @@
+# Parameters
+
 This is a page contains all parameters in LightGBM.
 
 ***List of other Helpful Links***
 * [Python API Reference](./Python-API.md)
 * [Parameters Tuning](./Parameters-tuning.md)
+
+***External Links***
+* [Laurae++ Interactive Documentation](https://sites.google.com/view/lauraepp/parameters)
 
 ***Update of 04/13/2017***
 
@@ -33,9 +38,12 @@ The parameter format is `key1=value1 key2=value2 ... ` . And parameters can be s
     * `poisson`, [Poisson regression](https://en.wikipedia.org/wiki/Poisson_regression "Poisson regression")
   * `binary`, binary classification application 
   * `lambdarank`, [lambdarank](https://pdfs.semanticscholar.org/fc9a/e09f9ced555558fdf1e997c0a5411fb51f15.pdf) application
+    * The label should be `int` type in lambdarank tasks, and larger number represent the higher relevance (e.g. 0:bad, 1:fair, 2:good, 3:perfect).
+    * `label_gain` can be used to set the gain(weight) of `int` label.
   * `multiclass`, multi-class classification application, should set `num_class` as well
-* `boosting`, default=`gbdt`, type=enum, options=`gbdt`,`dart`, alias=`boost`,`boosting_type`
+* `boosting`, default=`gbdt`, type=enum, options=`gbdt`,`rf`,`dart`,`goss`, alias=`boost`,`boosting_type`
   * `gbdt`, traditional Gradient Boosting Decision Tree 
+  * `rf`, Random Forest
   * `dart`, [Dropouts meet Multiple Additive Regression Trees](https://arxiv.org/abs/1505.01866)
   * `goss`, Gradient-based One-Side Sampling
 * `data`, default=`""`, type=string, alias=`train`,`train_data`
@@ -60,6 +68,8 @@ The parameter format is `key1=value1 key2=value2 ... ` . And parameters can be s
 * `num_threads`, default=OpenMP_default, type=int, alias=`num_thread`,`nthread`
   * Number of threads for LightGBM. 
   * For the best speed, set this to the number of **real CPU cores**, not the number of threads (most CPU using [hyper-threading](https://en.wikipedia.org/wiki/Hyper-threading) to generate 2 threads per CPU core).
+  * Do not set it too large if your dataset is small (do not use 64 threads for a dataset with 10,000 for instance).
+  * Be aware a task manager or any similar CPU monitoring tool might report cores not being fully utilized. This is normal.
   * For parallel learning, should not use full CPU cores since this will cause poor performance for the network.
 * `device`, default=`cpu`, options=`cpu`,`gpu`
   * Choose device for the tree learning, can use gpu to achieve the faster learning.
@@ -121,6 +131,8 @@ The parameter format is `key1=value1 key2=value2 ... ` . And parameters can be s
 * `max_bin`, default=`255`, type=int
   * max number of bin that feature values will bucket in. Small bin may reduce training accuracy but may increase general power (deal with over-fit).
   * LightGBM will auto compress memory according `max_bin`. For example, LightGBM will use `uint8_t` for feature value if `max_bin=255`.
+* `min_data_in_bin`, default=`5`, type=int
+  * min number of data inside one bin, use this to avoid one-data-one-bin (may over-fitting).
 * `data_random_seed`, default=`1`, type=int
   * random seed for data partition in parallel learning(not include feature parallel).
 * `output_model`, default=`LightGBM_model.txt`, type=string, alias=`model_output`,`model_out`
@@ -183,6 +195,17 @@ The parameter format is `key1=value1 key2=value2 ... ` . And parameters can be s
 * `num_iteration_predict`, default=`-1`, type=int
   * only used in prediction task, used to how many trained iterations will be used in prediction. 
   * `<= 0` means no limit
+* `pred_early_stop`, default=`false`, type=bool
+  * Set to `true` will use early-stopping to speed up the prediction. May affect the accuracy.
+* `pred_early_stop_freq`, default=`10`, type=int
+  * The frequency of checking early-stopping prediction.
+* `pred_early_stop_margin`, default=`10.0`, type=double
+  * The Threshold of margin in early-stopping prediction. 
+* `use_missing`, default=`true`, type=bool
+  * Set to `false` will disbale the special handle of missing value. 
+* `zero_as_missing`, default=`false`, type=bool
+  * Set to `true` will treat all zero as missing values (including the unshown values in libsvm/sparse matrics).
+  * Set to `false` will use `na` to represent missing values.
 
 
 ## Objective parameters
@@ -193,6 +216,8 @@ The parameter format is `key1=value1 key2=value2 ... ` . And parameters can be s
   * parameter for [Huber loss](https://en.wikipedia.org/wiki/Huber_loss "Huber loss - Wikipedia"). Will be used in regression task.
 * `fair_c`, default=`1.0`, type=double
   * parameter for [Fair loss](https://www.kaggle.com/c/allstate-claims-severity/discussion/24520). Will be used in regression task.
+* `gaussian_eta`, default=`1.0`, type=double
+  * parameter to control the width of Gaussian function. Will be used in l1 and huber regression loss.
 * `poission_max_delta_step`, default=`0.7`, type=double
   * parameter used to safeguard optimization
 * `scale_pos_weight`, default=`1.0`, type=double

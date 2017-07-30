@@ -123,14 +123,14 @@ public:
   }
 
   inline bool NextNonzero(data_size_t* i_delta,
-    data_size_t* cur_pos) const {
+                          data_size_t* cur_pos) const {
     ++(*i_delta);
     data_size_t shift = 0;
     data_size_t delta = deltas_[*i_delta];
     while (*i_delta < num_vals_ && vals_[*i_delta] == 0) {
       ++(*i_delta);
       shift += 8;
-      delta |=  static_cast<data_size_t>(deltas_[*i_delta]) << shift;
+      delta |= static_cast<data_size_t>(deltas_[*i_delta]) << shift;
     }
     *cur_pos += delta;
     if (*i_delta < num_vals_) {
@@ -142,7 +142,7 @@ public:
   }
 
   virtual data_size_t Split(
-    uint32_t min_bin, uint32_t max_bin, uint32_t default_bin,
+    uint32_t min_bin, uint32_t max_bin, uint32_t default_bin, MissingType missing_type, bool default_left,
     uint32_t threshold, data_size_t* data_indices, data_size_t num_data,
     data_size_t* lte_indices, data_size_t* gt_indices, BinType bin_type) const override {
     // not need to split
@@ -150,8 +150,10 @@ public:
     VAL_T th = static_cast<VAL_T>(threshold + min_bin);
     VAL_T minb = static_cast<VAL_T>(min_bin);
     VAL_T maxb = static_cast<VAL_T>(max_bin);
+    VAL_T t_default_bin = static_cast<VAL_T>(min_bin + default_bin);
     if (default_bin == 0) {
       th -= 1;
+      t_default_bin -= 1;
     }
     SparseBinIterator<VAL_T> iterator(this, data_indices[0]);
     data_size_t lte_count = 0;
@@ -159,19 +161,45 @@ public:
     data_size_t* default_indices = gt_indices;
     data_size_t* default_count = &gt_count;
     if (bin_type == BinType::NumericalBin) {
-      if (default_bin <= threshold) {
+      if (missing_type != MissingType::Zero && default_bin <= threshold) {
         default_indices = lte_indices;
         default_count = &lte_count;
       }
-      for (data_size_t i = 0; i < num_data; ++i) {
-        const data_size_t idx = data_indices[i];
-        VAL_T bin = iterator.InnerRawGet(idx);
-        if (bin > maxb || bin < minb) {
-          default_indices[(*default_count)++] = idx;
-        } else if (bin > th) {
-          gt_indices[gt_count++] = idx;
-        } else {
-          lte_indices[lte_count++] = idx;
+      if (default_left && missing_type == MissingType::Zero) {
+        default_indices = lte_indices;
+        default_count = &lte_count;
+      }
+      if (missing_type == MissingType::NaN) {
+        data_size_t* missing_default_indices = gt_indices;
+        data_size_t* missing_default_count = &gt_count;
+        if (default_left) {
+          missing_default_indices = lte_indices;
+          missing_default_count = &lte_count;
+        }
+        for (data_size_t i = 0; i < num_data; ++i) {
+          const data_size_t idx = data_indices[i];
+          VAL_T bin = iterator.InnerRawGet(idx);
+          if (bin < minb || bin > maxb || t_default_bin == bin) {
+            default_indices[(*default_count)++] = idx;
+          } else if (bin == maxb) {
+            missing_default_indices[(*missing_default_count)++] = idx;
+          } else if (bin > th) {
+            gt_indices[gt_count++] = idx;
+          } else {
+            lte_indices[lte_count++] = idx;
+          }
+        }
+      } else {
+        for (data_size_t i = 0; i < num_data; ++i) {
+          const data_size_t idx = data_indices[i];
+          VAL_T bin = iterator.InnerRawGet(idx);
+          if (bin < minb || bin > maxb || t_default_bin == bin) {
+            default_indices[(*default_count)++] = idx;
+          } else if (bin > th) {
+            gt_indices[gt_count++] = idx;
+          } else {
+            lte_indices[lte_count++] = idx;
+          }
         }
       }
     } else {
@@ -182,7 +210,7 @@ public:
       for (data_size_t i = 0; i < num_data; ++i) {
         const data_size_t idx = data_indices[i];
         VAL_T bin = iterator.InnerRawGet(idx);
-        if (bin > maxb || bin < minb) {
+        if (bin < minb || bin > maxb || t_default_bin == bin) {
           default_indices[(*default_count)++] = idx;
         } else if (bin != th) {
           gt_indices[gt_count++] = idx;
@@ -230,6 +258,7 @@ public:
       const data_size_t cur_idx = idx_val_pairs[i].first;
       const VAL_T bin = idx_val_pairs[i].second;
       data_size_t cur_delta = cur_idx - last_idx;
+      if (i > 0 && cur_delta == 0) { continue; }
       while (cur_delta >= 256) {
         deltas_.push_back(cur_delta & 0xff);
         vals_.push_back(0);
@@ -252,7 +281,6 @@ public:
   }
 
   void GetFastIndex() {
-
     fast_index_.clear();
     // get shift cnt
     data_size_t mod_size = (num_data_ + kNumFastIndex - 1) / kNumFastIndex;
@@ -333,10 +361,14 @@ public:
   }
 
   void CopySubset(const Bin* full_bin, const data_size_t* used_indices, data_size_t num_used_indices) override {
-    auto other_bin = reinterpret_cast<const SparseBin<VAL_T>*>(full_bin);
-    SparseBinIterator<VAL_T> iterator(other_bin, used_indices[0]);
+    auto other_bin = dynamic_cast<const SparseBin<VAL_T>*>(full_bin);
     deltas_.clear();
     vals_.clear();
+    data_size_t start = 0;
+    if (num_used_indices > 0) {
+      start = used_indices[0];
+    }
+    SparseBinIterator<VAL_T> iterator(other_bin, start);
     // transform to delta array
     data_size_t last_idx = 0;
     for (data_size_t i = 0; i < num_used_indices; ++i) {
@@ -394,9 +426,15 @@ inline VAL_T SparseBinIterator<VAL_T>::InnerRawGet(data_size_t idx) {
 
 template <typename VAL_T>
 inline void SparseBinIterator<VAL_T>::Reset(data_size_t start_idx) {
-  const auto fast_pair = bin_data_->fast_index_[start_idx >> bin_data_->fast_index_shift_];
-  i_delta_ = fast_pair.first;
-  cur_pos_ = fast_pair.second;
+  auto idx = start_idx >> bin_data_->fast_index_shift_;
+  if (static_cast<size_t>(idx) < bin_data_->fast_index_.size()) {
+    const auto fast_pair = bin_data_->fast_index_[start_idx >> bin_data_->fast_index_shift_];
+    i_delta_ = fast_pair.first;
+    cur_pos_ = fast_pair.second;
+  } else {
+    i_delta_ = -1;
+    cur_pos_ = 0;
+  }
 }
 
 template <typename VAL_T>

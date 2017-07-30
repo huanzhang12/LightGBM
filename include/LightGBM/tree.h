@@ -11,6 +11,8 @@
 namespace LightGBM {
 
 #define kMaxTreeOutput (100)
+#define kCategoricalMask (1)
+#define kDefaultLeftMask (2)
 
 /*!
 * \brief Tree model
@@ -44,11 +46,13 @@ public:
   * \param left_cnt Count of left child
   * \param right_cnt Count of right child
   * \param gain Split gain
+  * \param missing_type missing type
+  * \param default_left default direction for missing value
   * \return The index of new leaf.
   */
-  int Split(int leaf, int feature, BinType bin_type, uint32_t threshold, int real_feature,
-            double threshold_double, double left_value,
-            double right_value, data_size_t left_cnt, data_size_t right_cnt, double gain);
+  int Split(int leaf, int feature, BinType bin_type, uint32_t threshold, int real_feature, 
+            double threshold_double, double left_value, double right_value, 
+            data_size_t left_cnt, data_size_t right_cnt, double gain, MissingType missing_type, bool default_left);
 
   /*! \brief Get the output of one leaf */
   inline double LeafOutput(int leaf) const { return leaf_value_[leaf]; }
@@ -96,6 +100,8 @@ public:
   /*! \brief Get feature of specific split*/
   inline int split_feature(int split_idx) const { return split_feature_[split_idx]; }
 
+  inline double split_gain(int split_idx) const { return split_gain_[split_idx]; }
+
   /*!
   * \brief Shrinkage for the tree's output
   *        shrinkage rate (a.k.a learning rate) is used to tune the traning process
@@ -117,8 +123,11 @@ public:
   /*! \brief Serialize this object to json*/
   std::string ToJSON();
 
+  /*! \brief Serialize this object to if-else statement*/
+  std::string ToIfElse(int index, bool is_predict_leaf_index);
+
   template<typename T>
-  static bool CategoricalDecision(T fval, T threshold) {
+  inline static bool CategoricalDecision(T fval, T threshold) {
     if (static_cast<int>(fval) == static_cast<int>(threshold)) {
       return true;
     } else {
@@ -127,7 +136,7 @@ public:
   }
 
   template<typename T>
-  static bool NumericalDecision(T fval, T threshold) {
+  inline static bool NumericalDecision(T fval, T threshold) {
     if (fval <= threshold) {
       return true;
     } else {
@@ -135,7 +144,67 @@ public:
     }
   }
 
-  static const char* GetDecisionTypeName(int8_t type) {
+  inline static bool IsZero(double fval) {
+    if (fval > -kZeroAsMissingValueRange && fval <= kZeroAsMissingValueRange) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  inline static bool GetDecisionType(int8_t decision_type, int8_t mask) {
+    return (decision_type & mask) > 0;
+  }
+
+  inline static void SetDecisionType(int8_t* decision_type, bool input, int8_t mask) {
+    if (input) {
+      (*decision_type) |= mask;
+    } else {
+      (*decision_type) &= (127 - mask);
+    }
+  }
+
+  inline static int8_t GetMissingType(int8_t decision_type) {
+    return (decision_type >> 2) & 3;
+  }
+
+  inline static void SetMissingType(int8_t* decision_type, int8_t input) {
+    (*decision_type) &= 3;
+    (*decision_type) |= (input << 2);
+  }
+
+  inline static uint32_t ConvertMissingValue(uint32_t fval, uint32_t threshold, int8_t decision_type, uint32_t default_bin, uint32_t max_bin) {
+    uint8_t missing_type = GetMissingType(decision_type);
+    if ((missing_type == 1 && fval == default_bin)
+        || (missing_type == 2 && fval == max_bin)) {
+      if (GetDecisionType(decision_type, kDefaultLeftMask)) {
+        fval = threshold;
+      } else {
+        fval = threshold + 1;
+      }
+    }
+    return fval;
+  }
+
+  inline static double ConvertMissingValue(double fval, double threshold, int8_t decision_type) {
+    uint8_t missing_type = GetMissingType(decision_type);
+    if (std::isnan(fval)) {
+      if (missing_type != 2) {
+        fval = 0.0f;
+      }
+    }
+    if ((missing_type == 1 && IsZero(fval))
+        || (missing_type == 2 && std::isnan(fval))) {
+      if (GetDecisionType(decision_type, kDefaultLeftMask)) {
+        fval = threshold;
+      } else {
+        fval = 10.0f * threshold;
+      }
+    }
+    return fval;
+  }
+
+  inline static const char* GetDecisionTypeName(int8_t type) {
     if (type == 0) {
       return "no_greater";
     } else {
@@ -158,6 +227,9 @@ private:
   /*! \brief Serialize one node to json*/
   inline std::string NodeToJSON(int index);
 
+  /*! \brief Serialize one node to if-else statement*/
+  inline std::string NodeToIfElse(int index, bool is_predict_leaf_index);
+
   /*! \brief Number of max leaves*/
   int max_leaves_;
   /*! \brief Number of current levas*/
@@ -168,14 +240,14 @@ private:
   /*! \brief A non-leaf node's right child */
   std::vector<int> right_child_;
   /*! \brief A non-leaf node's split feature */
-  std::vector<int> split_feature_inner;
+  std::vector<int> split_feature_inner_;
   /*! \brief A non-leaf node's split feature, the original index */
   std::vector<int> split_feature_;
   /*! \brief A non-leaf node's split threshold in bin */
   std::vector<uint32_t> threshold_in_bin_;
   /*! \brief A non-leaf node's split threshold in feature value */
   std::vector<double> threshold_;
-  /*! \brief Decision type, 0 for '<='(numerical feature), 1 for 'is'(categorical feature) */
+  /*! \brief Store the information for categorical feature handle and mising value handle. */
   std::vector<int8_t> decision_type_;
   /*! \brief A non-leaf node's split gain */
   std::vector<double> split_gain_;
@@ -218,8 +290,9 @@ inline int Tree::GetLeaf(const double* feature_values) const {
   int node = 0;
   if (has_categorical_) {
     while (node >= 0) {
-      if (decision_funs[decision_type_[node]](
-        feature_values[split_feature_[node]],
+      double fval = ConvertMissingValue(feature_values[split_feature_[node]], threshold_[node], decision_type_[node]);
+      if (decision_funs[GetDecisionType(decision_type_[node], kCategoricalMask)](
+        fval,
         threshold_[node])) {
         node = left_child_[node];
       } else {
@@ -228,8 +301,9 @@ inline int Tree::GetLeaf(const double* feature_values) const {
     }
   } else {
     while (node >= 0) {
+      double fval = ConvertMissingValue(feature_values[split_feature_[node]], threshold_[node], decision_type_[node]);
       if (NumericalDecision<double>(
-        feature_values[split_feature_[node]],
+        fval,
         threshold_[node])) {
         node = left_child_[node];
       } else {

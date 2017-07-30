@@ -1,0 +1,60 @@
+
+version: 1.0.{build}
+environment:
+  matrix:
+    - PYTHON: "C:/Python36-x64"
+      PYTHON_VERSION: 3.6
+      MINICONDA: "C:/Miniconda36-x64"
+
+clone_depth: 50
+
+init:
+  - "ECHO %PYTHON_VERSION% %MINICONDA%"
+
+build_script:
+  - mkdir build && cd build
+  - cmake -DCMAKE_GENERATOR_PLATFORM=x64 .. && cmake --build . --target ALL_BUILD --config Release
+  - cd ..
+
+test_script:
+  - "set PATH=%MINICONDA%;%MINICONDA%/Scripts;%PATH%"
+  - conda config --set always_yes yes --set changeps1 no
+  - conda update -q conda
+  - conda info -a
+  - conda install --yes numpy scipy scikit-learn pandas matplotlib
+  - pip install pep8 pytest
+  - pytest tests/c_api_test/test.py
+  - "set /p LGB_VER=< VERSION.txt"
+  - cd python-package && python setup.py sdist --formats gztar
+  - cd dist 
+  - "pip install lightgbm-%LGB_VER%.tar.gz -v"
+  - cd ../..
+  - pytest tests/python_package_test
+  - cd python-package && python setup.py bdist_wheel --plat-name=win-amd64 --universal
+  - cd ../.nuget
+  - python create_nuget.py
+  - nuget.exe pack LightGBM.nuspec
+
+nuget:
+  project_feed: true
+
+artifacts:
+- path: Release/lib_lightgbm.dll
+  name: Library
+- path: Release/lightgbm.exe
+  name: Exe
+- path: python-package/dist/*
+  name: Pip
+- path: .nuget/*.nupkg
+  name: Nuget
+
+deploy:
+  release: $(APPVEYOR_REPO_TAG_NAME)
+  provider: GitHub
+  auth_token:
+    secure: KR44XwtxY0cLlVpQwY726BvC6gzT0cYTf0ahJ4cSvvS0UVoSJxkR900ICfVXHRoT
+  artifact: Library,Exe,Pip,Nuget
+  force_update: true
+  draft: true
+  on:
+    appveyor_repo_tag: true

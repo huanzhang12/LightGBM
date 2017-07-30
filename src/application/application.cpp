@@ -8,6 +8,7 @@
 #include <LightGBM/dataset_loader.h>
 #include <LightGBM/boosting.h>
 #include <LightGBM/objective_function.h>
+#include <LightGBM/prediction_early_stop.h>
 #include <LightGBM/metric.h>
 
 #include "predictor.hpp"
@@ -32,9 +33,10 @@ Application::Application(int argc, char** argv) {
   if (config_.num_threads > 0) {
     omp_set_num_threads(config_.num_threads);
   }
-  if (config_.io_config.data_filename.size() == 0) {
+  if (config_.io_config.data_filename.size() == 0 && config_.task_type != TaskType::kConvertModel) {
     Log::Fatal("No training/prediction data, application quit");
   }
+  omp_set_nested(0);
 }
 
 Application::~Application() {
@@ -106,9 +108,10 @@ void Application::LoadData() {
   std::unique_ptr<Predictor> predictor;
   // prediction is needed if using input initial model(continued train)
   PredictFunction predict_fun = nullptr;
+  PredictionEarlyStopInstance pred_early_stop = CreatePredictionEarlyStopInstance("none", LightGBM::PredictionEarlyStopConfig());
   // need to continue training
   if (boosting_->NumberOfTotalModel() > 0) {
-    predictor.reset(new Predictor(boosting_.get(), -1, true, false));
+    predictor.reset(new Predictor(boosting_.get(), -1, true, false, false, -1, -1));
     predict_fun = predictor->GetPredictFunction();
   }
 
@@ -231,17 +234,26 @@ void Application::Train() {
     // output used time per iteration
     Log::Info("%f seconds elapsed, finished iteration %d", std::chrono::duration<double,
               std::milli>(end_time - start_time) * 1e-3, iter + 1);
+    if (config_.io_config.snapshot_freq > 0 
+        && (iter+1) % config_.io_config.snapshot_freq == 0) {
+      std::string snapshot_out = config_.io_config.output_model + ".snapshot_iter_" + std::to_string(iter + 1);
+      boosting_->SaveModelToFile(-1, snapshot_out.c_str());
+    }
   }
   // save model to file
   boosting_->SaveModelToFile(-1, config_.io_config.output_model.c_str());
+  // convert model to if-else statement code
+  if (config_.convert_model_language == std::string("cpp")) {
+    boosting_->SaveModelToIfElse(-1, config_.io_config.convert_model.c_str());
+  }
   Log::Info("Finished training");
 }
-
 
 void Application::Predict() {
   // create predictor
   Predictor predictor(boosting_.get(), config_.io_config.num_iteration_predict, config_.io_config.is_predict_raw_score,
-                      config_.io_config.is_predict_leaf_index);
+                      config_.io_config.is_predict_leaf_index, config_.io_config.pred_early_stop, 
+                      config_.io_config.pred_early_stop_freq, config_.io_config.pred_early_stop_margin);
   predictor.Predict(config_.io_config.data_filename.c_str(),
                     config_.io_config.output_result.c_str(), config_.io_config.has_header);
   Log::Info("Finished prediction");
@@ -251,6 +263,13 @@ void Application::InitPredict() {
   boosting_.reset(
     Boosting::CreateBoosting(config_.io_config.input_model.c_str()));
   Log::Info("Finished initializing prediction");
+}
+
+void Application::ConvertModel() {
+  boosting_.reset(
+    Boosting::CreateBoosting(config_.boosting_type,
+                             config_.io_config.input_model.c_str()));
+  boosting_->SaveModelToIfElse(-1, config_.io_config.convert_model.c_str());
 }
 
 template<typename T>

@@ -124,16 +124,10 @@ class LGBMModel(LGBMModelBase):
 
     def __init__(self, boosting_type="gbdt", num_leaves=31, max_depth=-1,
                  learning_rate=0.1, n_estimators=10, max_bin=255,
-                 subsample_for_bin=50000, objective="regression",
+                 subsample_for_bin=50000, objective=None,
                  min_split_gain=0, min_child_weight=5, min_child_samples=10,
                  subsample=1, subsample_freq=1, colsample_bytree=1,
-                 reg_alpha=0, reg_lambda=0, scale_pos_weight=1,
-                 is_unbalance=False, seed=0, nthread=-1, silent=True,
-                 sigmoid=1.0, huber_delta=1.0, gaussian_eta=1.0, fair_c=1.0,
-                 poisson_max_delta_step=0.7,
-                 max_position=20, label_gain=None,
-                 drop_rate=0.1, skip_drop=0.5, max_drop=50,
-                 uniform_drop=False, xgboost_dart_mode=False):
+                 reg_alpha=0, reg_lambda=0, seed=0, nthread=-1, silent=True, **kwargs):
         """
         Implementation of the Scikit-Learn API for LightGBM.
 
@@ -174,43 +168,15 @@ class LGBMModel(LGBMModelBase):
             L1 regularization term on weights
         reg_lambda : float
             L2 regularization term on weights
-        scale_pos_weight : float
-            Balancing of positive and negative weights.
-        is_unbalance : bool
-            Is unbalance for binary classification
         seed : int
             Random number seed.
         nthread : int
             Number of parallel threads
         silent : boolean
             Whether to print messages while running boosting.
-        sigmoid : float
-            Only used in binary classification and lambdarank. Parameter for sigmoid function.
-        huber_delta : float
-            Only used in regression. Parameter for Huber loss function.
-        gaussian_eta : float
-            Only used in regression. Parameter for L1 and Huber loss function.
-            It is used to control the width of Gaussian function to approximate hessian.
-        fair_c : float
-            Only used in regression. Parameter for Fair loss function.
-        poisson_max_delta_step : float
-            parameter used to safeguard optimization in Poisson regression.
-        max_position : int
-            Only used in lambdarank, will optimize NDCG at this position.
-        label_gain : list of float
-            Only used in lambdarank, relevant gain for labels.
-            For example, the gain of label 2 is 3 if using default label gains.
-            None (default) means use default value of CLI version: {0,1,3,7,15,31,63,...}.
-        drop_rate : float
-            Only used when boosting_type='dart'. Probablity to select dropping trees.
-        skip_drop : float
-            Only used when boosting_type='dart'. Probablity to skip dropping trees.
-        max_drop : int
-            Only used when boosting_type='dart'. Max number of dropped trees in one iteration.
-        uniform_drop : bool
-            Only used when boosting_type='dart'. If true, drop trees uniformly, else drop according to weights.
-        xgboost_dart_mode : bool
-            Only used when boosting_type='dart'. Whether use xgboost dart mode.
+        **kwargs : other parameters
+            Check http://lightgbm.readthedocs.io/en/latest/Parameters.html for more parameters.
+            Note: **kwargs is not supported in sklearn, it may cause unexpected issues.
 
         Note
         ----
@@ -238,13 +204,23 @@ class LGBMModel(LGBMModelBase):
             raise LightGBMError('Scikit-learn is required for this module')
 
         self.boosting_type = boosting_type
+        if objective is None:
+            if isinstance(self, LGBMRegressor):
+                self.objective = "regression"
+            elif isinstance(self, LGBMClassifier):
+                self.objective = "binary"
+            elif isinstance(self, LGBMRanker):
+                self.objective = "lambdarank"
+            else:
+                raise TypeError("Unknown LGBMModel type.")
+        else:
+            self.objective = objective
         self.num_leaves = num_leaves
         self.max_depth = max_depth
         self.learning_rate = learning_rate
         self.n_estimators = n_estimators
         self.max_bin = max_bin
         self.subsample_for_bin = subsample_for_bin
-        self.objective = objective
         self.min_split_gain = min_split_gain
         self.min_child_weight = min_child_weight
         self.min_child_samples = min_child_samples
@@ -253,23 +229,9 @@ class LGBMModel(LGBMModelBase):
         self.colsample_bytree = colsample_bytree
         self.reg_alpha = reg_alpha
         self.reg_lambda = reg_lambda
-        self.scale_pos_weight = scale_pos_weight
-        self.is_unbalance = is_unbalance
         self.seed = seed
         self.nthread = nthread
         self.silent = silent
-        self.sigmoid = sigmoid
-        self.huber_delta = huber_delta
-        self.gaussian_eta = gaussian_eta
-        self.fair_c = fair_c
-        self.poisson_max_delta_step = poisson_max_delta_step
-        self.max_position = max_position
-        self.label_gain = label_gain
-        self.drop_rate = drop_rate
-        self.skip_drop = skip_drop
-        self.max_drop = max_drop
-        self.uniform_drop = uniform_drop
-        self.xgboost_dart_mode = xgboost_dart_mode
         self._Booster = None
         self.evals_result = None
         self.best_iteration = -1
@@ -278,6 +240,20 @@ class LGBMModel(LGBMModelBase):
             self.fobj = _objective_function_wrapper(self.objective)
         else:
             self.fobj = None
+        self.other_params = {}
+        self.set_params(**kwargs)
+
+    def get_params(self, deep=True):
+        params = super(LGBMModel, self).get_params(deep=deep)
+        params.update(self.other_params)
+        return params
+
+    # minor change to support `**kwargs`
+    def set_params(self, **params):
+        for key, value in params.items():
+            setattr(self, key, value)
+            self.other_params[key] = value
+        return self
 
     def fit(self, X, y,
             sample_weight=None, init_score=None, group=None,
@@ -357,15 +333,17 @@ class LGBMModel(LGBMModelBase):
         """
         evals_result = {}
         params = self.get_params()
-        params['verbose'] = -1 if self.silent else 1
+        # user can set verbose with kwargs, it has higher priority
+        if 'verbose' not in params and self.silent:
+            params['verbose'] = -1
+        params.pop('silent', None)
+        params.pop('n_estimators', None)
         if hasattr(self, 'n_classes_') and self.n_classes_ > 2:
             params['num_class'] = self.n_classes_
         if hasattr(self, 'eval_at'):
             params['ndcg_eval_at'] = self.eval_at
         if self.fobj:
             params['objective'] = 'None'  # objective = nullptr for unknown objective
-        if 'label_gain' in params and params['label_gain'] is None:
-            del params['label_gain']  # use default of cli version
 
         if callable(eval_metric):
             feval = _eval_function_wrapper(eval_metric)
@@ -491,31 +469,6 @@ class LGBMModel(LGBMModelBase):
 
 class LGBMRegressor(LGBMModel, LGBMRegressorBase):
 
-    def __init__(self, boosting_type="gbdt", num_leaves=31, max_depth=-1,
-                 learning_rate=0.1, n_estimators=10, max_bin=255,
-                 subsample_for_bin=50000, objective="regression",
-                 min_split_gain=0, min_child_weight=5, min_child_samples=10,
-                 subsample=1, subsample_freq=1, colsample_bytree=1,
-                 reg_alpha=0, reg_lambda=0,
-                 seed=0, nthread=-1, silent=True,
-                 huber_delta=1.0, gaussian_eta=1.0, fair_c=1.0,
-                 poisson_max_delta_step=0.7,
-                 drop_rate=0.1, skip_drop=0.5, max_drop=50,
-                 uniform_drop=False, xgboost_dart_mode=False):
-        super(LGBMRegressor, self).__init__(boosting_type=boosting_type, num_leaves=num_leaves,
-                                            max_depth=max_depth, learning_rate=learning_rate,
-                                            n_estimators=n_estimators, max_bin=max_bin,
-                                            subsample_for_bin=subsample_for_bin, objective=objective,
-                                            min_split_gain=min_split_gain, min_child_weight=min_child_weight,
-                                            min_child_samples=min_child_samples, subsample=subsample,
-                                            subsample_freq=subsample_freq, colsample_bytree=colsample_bytree,
-                                            reg_alpha=reg_alpha, reg_lambda=reg_lambda,
-                                            seed=seed, nthread=nthread, silent=silent,
-                                            huber_delta=huber_delta, gaussian_eta=gaussian_eta, fair_c=fair_c,
-                                            poisson_max_delta_step=poisson_max_delta_step,
-                                            drop_rate=drop_rate, skip_drop=skip_drop, max_drop=max_drop,
-                                            uniform_drop=uniform_drop, xgboost_dart_mode=xgboost_dart_mode)
-
     def fit(self, X, y,
             sample_weight=None, init_score=None,
             eval_set=None, eval_names=None, eval_sample_weight=None,
@@ -539,30 +492,6 @@ class LGBMRegressor(LGBMModel, LGBMRegressorBase):
 
 class LGBMClassifier(LGBMModel, LGBMClassifierBase):
 
-    def __init__(self, boosting_type="gbdt", num_leaves=31, max_depth=-1,
-                 learning_rate=0.1, n_estimators=10, max_bin=255,
-                 subsample_for_bin=50000, objective="binary",
-                 min_split_gain=0, min_child_weight=5, min_child_samples=10,
-                 subsample=1, subsample_freq=1, colsample_bytree=1,
-                 reg_alpha=0, reg_lambda=0, scale_pos_weight=1,
-                 is_unbalance=False, seed=0, nthread=-1,
-                 silent=True, sigmoid=1.0,
-                 drop_rate=0.1, skip_drop=0.5, max_drop=50,
-                 uniform_drop=False, xgboost_dart_mode=False):
-        self.classes, self.n_classes = None, None
-        super(LGBMClassifier, self).__init__(boosting_type=boosting_type, num_leaves=num_leaves,
-                                             max_depth=max_depth, learning_rate=learning_rate,
-                                             n_estimators=n_estimators, max_bin=max_bin,
-                                             subsample_for_bin=subsample_for_bin, objective=objective,
-                                             min_split_gain=min_split_gain, min_child_weight=min_child_weight,
-                                             min_child_samples=min_child_samples, subsample=subsample,
-                                             subsample_freq=subsample_freq, colsample_bytree=colsample_bytree,
-                                             reg_alpha=reg_alpha, reg_lambda=reg_lambda,
-                                             scale_pos_weight=scale_pos_weight, is_unbalance=is_unbalance,
-                                             seed=seed, nthread=nthread, silent=silent, sigmoid=sigmoid,
-                                             drop_rate=drop_rate, skip_drop=skip_drop, max_drop=max_drop,
-                                             uniform_drop=uniform_drop, xgboost_dart_mode=xgboost_dart_mode)
-
     def fit(self, X, y,
             sample_weight=None, init_score=None,
             eval_set=None, eval_names=None, eval_sample_weight=None,
@@ -572,7 +501,7 @@ class LGBMClassifier(LGBMModel, LGBMClassifierBase):
             feature_name='auto', categorical_feature='auto',
             callbacks=None):
         self._le = LGBMLabelEncoder().fit(y)
-        y = self._le.transform(y)
+        _y = self._le.transform(y)
 
         self.classes = self._le.classes_
         self.n_classes = len(self.classes_)
@@ -590,9 +519,15 @@ class LGBMClassifier(LGBMModel, LGBMClassifierBase):
                 eval_metric = 'binary_error'
 
         if eval_set is not None:
-            eval_set = [(x[0], self._le.transform(x[1])) for x in eval_set]
+            if isinstance(eval_set, tuple):
+                eval_set = [eval_set]
+            for i, (valid_x, valid_y) in enumerate(eval_set):
+                if valid_x is X and valid_y is y:
+                    eval_set[i] = (valid_x, _y)
+                else:
+                    eval_set[i] = (valid_x, self._le.transform(valid_y))
 
-        super(LGBMClassifier, self).fit(X, y, sample_weight=sample_weight,
+        super(LGBMClassifier, self).fit(X, _y, sample_weight=sample_weight,
                                         init_score=init_score, eval_set=eval_set,
                                         eval_names=eval_names,
                                         eval_sample_weight=eval_sample_weight,
@@ -647,30 +582,6 @@ class LGBMClassifier(LGBMModel, LGBMClassifierBase):
 
 
 class LGBMRanker(LGBMModel):
-
-    def __init__(self, boosting_type="gbdt", num_leaves=31, max_depth=-1,
-                 learning_rate=0.1, n_estimators=10, max_bin=255,
-                 subsample_for_bin=50000, objective="lambdarank",
-                 min_split_gain=0, min_child_weight=5, min_child_samples=10,
-                 subsample=1, subsample_freq=1, colsample_bytree=1,
-                 reg_alpha=0, reg_lambda=0, scale_pos_weight=1,
-                 is_unbalance=False, seed=0, nthread=-1, silent=True,
-                 sigmoid=1.0, max_position=20, label_gain=None,
-                 drop_rate=0.1, skip_drop=0.5, max_drop=50,
-                 uniform_drop=False, xgboost_dart_mode=False):
-        super(LGBMRanker, self).__init__(boosting_type=boosting_type, num_leaves=num_leaves,
-                                         max_depth=max_depth, learning_rate=learning_rate,
-                                         n_estimators=n_estimators, max_bin=max_bin,
-                                         subsample_for_bin=subsample_for_bin, objective=objective,
-                                         min_split_gain=min_split_gain, min_child_weight=min_child_weight,
-                                         min_child_samples=min_child_samples, subsample=subsample,
-                                         subsample_freq=subsample_freq, colsample_bytree=colsample_bytree,
-                                         reg_alpha=reg_alpha, reg_lambda=reg_lambda,
-                                         scale_pos_weight=scale_pos_weight, is_unbalance=is_unbalance,
-                                         seed=seed, nthread=nthread, silent=silent,
-                                         sigmoid=sigmoid, max_position=max_position, label_gain=label_gain,
-                                         drop_rate=drop_rate, skip_drop=skip_drop, max_drop=max_drop,
-                                         uniform_drop=uniform_drop, xgboost_dart_mode=xgboost_dart_mode)
 
     def fit(self, X, y,
             sample_weight=None, init_score=None, group=None,
